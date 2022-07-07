@@ -4,9 +4,9 @@ from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
 
-# __all__ = [
-#     'resmlp_12', 'resmlp_24', 'resmlp_36', 'resmlpB_24'
-# ]
+__all__ = [
+    'resmlp_12', 'resmlp_24'
+]
 
 # class Affine(nn.Module):
 #     def __init__(self, dim):
