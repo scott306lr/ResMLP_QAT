@@ -14,10 +14,10 @@ from timm.data import Mixup
 from timm.loss import SoftTargetCrossEntropy
 
 
-def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, with_mixup, device):
+def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, early_stop=-1):
     model.to(device)
-    if with_mixup:
-        criterion = SoftTargetCrossEntropy()
+    train_criterion = CrossEntropyLoss()
+    eval_criterion  = CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(),
                             lr=learning_rate,
                             momentum=0.9,
@@ -25,10 +25,12 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                         milestones=[100, 150],
                                                         gamma=0.1,
+                        
                                                         last_epoch=-1)     
     # additional data augmentation (mixup)
     mixup_fn = None
     if with_mixup:
+        train_criterion = SoftTargetCrossEntropy()
         mixup_fn = Mixup(
             mixup_alpha=0.8, cutmix_alpha=1.0, cutmix_minmax=None,
             prob=1.0, switch_prob=0.5, mode='batch',
@@ -37,9 +39,9 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
     for epoch in tqdm(range(epochs)):
         # Training
         model.train()
-        train_one_epoch(model=model, criterion=criterion,
+        train_one_epoch(model=model, criterion=train_criterion,
                   data_loader=train_loader, optimizer=optimizer,
-                  device=device, epoch=1, max_norm=None,
+                  device=device, epoch=1, max_norm=None, early_stop=early_stop,
                   model_ema=None, mixup_fn=mixup_fn)
 
         # Evaluation
@@ -47,23 +49,28 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
         eval_loss, top1_acc, top5_acc = evaluate_model(model=model,
                                                 test_loader=test_loader,
                                                 device="cpu",
-                                                criterion=criterion)
+                                                criterion=eval_criterion)
         print("Epoch: {:02d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
             -1, eval_loss, top1_acc, top5_acc))
         
         fname = f'epoch{epoch}_{eval_loss}_{top1_acc}_{top5_acc}'
-        save_torchscript_model(model, "temp", fname)
+        save_torchscript_model(model, "fp32_weights", fname)
         scheduler.step()
+        
+    return model
 
 def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0,
+                    device: torch.device, epoch: int, max_norm: float = 0,  early_stop: int = -1, 
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None):
     model.train()
     model.to(device)
     
     pbar = tqdm(data_loader, leave=False)
     for i, (inputs, labels) in enumerate(pbar):
+        if i == early_stop: 
+            break
+
         inputs = inputs.to(device)
         labels = labels.to(device)
         optimizer.zero_grad()
@@ -84,17 +91,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
         optimizer.step()
         #print("pass me!")
         
-        if i % 10 == 0:
-            loss_val = loss.item()
-            
-            if mixup_fn is not None:
-                output_str = "i: {:02d} Eval Loss: {:.3f}".format(
-                    i, loss_val)
-            else:
-                prec1, prec5 = accuracy(outputs.data, labels.data, topk=(1, 5))
-                output_str = "i: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
-                    i, loss_val, prec1, prec5)
-            pbar.set_description(output_str)
+        loss_val = loss.item()
+        if i % 10 == 0 and mixup_fn is None:
+            prec1, prec5 = accuracy(outputs.data, labels.data, topk=(1, 5))
+            output_str = "i: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(i, loss_val, prec1, prec5)
+        else:
+            output_str = "i: {:02d} Eval Loss: {:.3f}".format(i, loss_val)
+        pbar.set_description(output_str)
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()))

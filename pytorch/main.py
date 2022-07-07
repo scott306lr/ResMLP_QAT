@@ -4,9 +4,9 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 import copy
 
-from run_model import evaluate_model, train_one_epoch
+from run_model import evaluate_model, train_one_epoch, qat_train_model
 from run_model import save_torchscript_model, load_torchscript_model
-from datasets import tfds_data_loader #data_loader, 
+from datasets import data_loader #tfds_data_loader, 
 import resmlp
 
 from timm.models import create_model
@@ -17,14 +17,13 @@ from timm.utils import NativeScaler, get_state_dict, ModelEma
 
 # Parameters
 INPUT_SIZE = 224
-DICT_PATH = 'E:\ResMLP_QAT\pytorch\ResMLP_S24_ReLU_99dense.pth' 
+DICT_PATH = 'ResMLP_S24_ReLU_99dense.pth' 
 
 DATA_NAME = 'imagenet2012'
-DATA_DIR = 'E:\datasets'
-#DATA_DIR = '/mnt/disk1/imagenet/'
+DATA_DIR = '/mnt/disk1/imagenet/'
 
 BATCH_SIZE = 32
-EPOCHS = 100
+EPOCHS = 10
 LR = 1e-4#0.003
 
 WORKERS = 0 #8
@@ -43,6 +42,10 @@ class QuantizedResMLP(nn.Module):
         return x
 
 def main():
+  print(f"BATCH_SIZE: {BATCH_SIZE}")
+  print(f"LR: {LR}")
+  print(f"EPOCHS: {EPOCHS}")
+
   # device = CUDA
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   print("Device: ", device)
@@ -58,7 +61,7 @@ def main():
   # build train/val dataset
   # create sampler (if dataset from tfds, can't apply sampler) (distributed ver. to be done)
   # build up dataloader
-  data_loader_train, data_loader_val, NUM_CLASSES = tfds_data_loader(
+  data_loader_train, data_loader_val, NUM_CLASSES = data_loader(
       name=DATA_NAME,
       root=DATA_DIR,
       input_size=INPUT_SIZE, 
@@ -97,24 +100,7 @@ def main():
   print("Training QAT Model...")
   quantized_model.train()
   torch.quantization.prepare_qat(quantized_model, inplace=True)
-
-  # train params
-  #loss_scaler = NativeScaler()
-  #criterion = SoftTargetCrossEntropy() # for mixup
-  criterion = nn.CrossEntropyLoss()
-  optimizer = optim.SGD(quantized_model.parameters(),
-                        lr=LR,
-                        momentum=0.9,
-                        weight_decay=1e-4)
-  # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-  #                                                   milestones=[100, 150],
-  #                                                   gamma=0.1,
-  #                                                   last_epoch=-1)
-
-  train_one_epoch(model=quantized_model, criterion=criterion,
-                    data_loader=data_loader_train, optimizer=optimizer,
-                    device=device, epoch=1, max_norm=None,
-                    model_ema=None, mixup_fn=None)#mixup_fn)
+  model = qat_train_model(model, data_loader_train, data_loader_val, LR, EPOCHS, NUM_CLASSES, device, with_mixup=True, early_stop=2000)
 
   # convert weight to int8, replace model to quantized ver.
   quantized_model.cpu()
