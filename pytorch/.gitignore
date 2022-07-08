@@ -11,7 +11,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+tempCodeRunnerFile.py
 
 # ignore model weights
 *.pth
-

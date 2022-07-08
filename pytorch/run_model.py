@@ -14,7 +14,7 @@ from timm.data import Mixup
 from timm.loss import SoftTargetCrossEntropy
 
 
-def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, early_stop=-1):
+def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1):
     model.to(device)
     train_criterion = CrossEntropyLoss()
     eval_criterion  = CrossEntropyLoss()
@@ -41,34 +41,39 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
         model.train()
         train_one_epoch(model=model, criterion=train_criterion,
                   data_loader=train_loader, optimizer=optimizer,
-                  device=device, epoch=1, max_norm=None, early_stop=early_stop,
+                  device=device, epoch=1, max_norm=None, start=epoch*save_interval, stop=(epoch+1)*save_interval,
                   model_ema=None, mixup_fn=mixup_fn)
 
         # Evaluation
-        model.eval()
-        eval_loss, top1_acc, top5_acc = evaluate_model(model=model,
+        model.cpu()
+        qmodel = torch.quantization.convert(model, inplace=False)
+        qmodel.eval()
+        eval_loss, top1_acc, top5_acc = evaluate_model(model=qmodel,
                                                 test_loader=test_loader,
                                                 device="cpu",
                                                 criterion=eval_criterion)
-        print("Epoch: {:02d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
-            -1, eval_loss, top1_acc, top5_acc))
+        print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
+            epoch, eval_loss, top1_acc, top5_acc))
         
-        fname = f'epoch{epoch}_{eval_loss}_{top1_acc}_{top5_acc}'
-        save_torchscript_model(model, "fp32_weights", fname)
+        fname = 'epoch{:d}_{:.3f}_{:.3f}_{:.3f}.pth'.format(
+            epoch, eval_loss, top1_acc, top5_acc)
+        save_torchscript_model(qmodel, "fp32_weights", fname)
         scheduler.step()
         
     return model
 
 def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0,  early_stop: int = -1, 
+                    device: torch.device, epoch: int, max_norm: float = 0,  start: int = 0, stop: int = -1, 
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None):
     model.train()
     model.to(device)
     
     pbar = tqdm(data_loader, leave=False)
     for i, (inputs, labels) in enumerate(pbar):
-        if i == early_stop: 
+        if i < start:
+            continue 
+        if i == stop: 
             break
 
         inputs = inputs.to(device)
