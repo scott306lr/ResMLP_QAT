@@ -13,8 +13,10 @@ import torch.optim as optim
 from timm.data import Mixup
 from timm.loss import SoftTargetCrossEntropy
 
+import wandb
 
-def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1):
+
+def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1, save_dir='fp32_weights'):
     model.to(device)
     train_criterion = CrossEntropyLoss()
     eval_criterion  = CrossEntropyLoss()
@@ -25,7 +27,6 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                         milestones=[100, 150],
                                                         gamma=0.1,
-                        
                                                         last_epoch=-1)     
     # additional data augmentation (mixup)
     mixup_fn = None
@@ -57,7 +58,7 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
         
         fname = 'epoch{:d}_{:.3f}_{:.3f}_{:.3f}.pth'.format(
             epoch, eval_loss, top1_acc, top5_acc)
-        save_torchscript_model(qmodel, "fp32_weights", fname)
+        save_torchscript_model(qmodel, save_dir, fname)
         scheduler.step()
         
     return model
@@ -82,19 +83,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
 
         if mixup_fn is not None:
             inputs, labels = mixup_fn(inputs, labels)
-        #print("pass me!")
-        #print(inputs, labels)
-                    
-        # with torch.cuda.amp.autocast():
-        #     outputs = model(inputs)
-        #     loss = criterion(outputs, labels)
-        #     loss.backward()
-        #     optimizer.step()
+
         outputs = model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        #print("pass me!")
         
         loss_val = loss.item()
         if i % 10 == 0 and mixup_fn is None:
@@ -103,6 +96,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
         else:
             output_str = "i: {:02d} Eval Loss: {:.3f}".format(i, loss_val)
         pbar.set_description(output_str)
+
+        if i % 10 == 0:
+            wandb.log({"loss": loss_val})
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()))

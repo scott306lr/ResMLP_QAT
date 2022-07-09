@@ -13,5 +13,8 @@ __pycache__/
 *.py[cod]
 tempCodeRunnerFile.py
 
+# ignore wandb folder
+/wandb
+
 # ignore model weights
 *.pth

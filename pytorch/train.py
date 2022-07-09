@@ -7,6 +7,7 @@ import numpy as np
 from run_model import qat_train_model
 from run_model import save_torchscript_model
 
+import wandb
 import resmlp
 from timm.models import create_model
 
@@ -54,6 +55,16 @@ def main():
   SAVE_DIR   = args.save_dir
   PER_SAVE   = args.per_save
     
+  # wandb login
+  # wandb.login(key=)
+  wandb.init(project="resmlp_qat")
+  wandb.config = {
+    "learning_rate": LR,
+    "epochs": EPOCHS,
+    "batch_size": BATCH_SIZE
+  }
+
+  # status
   print(f"BATCH_SIZE: {BATCH_SIZE}")
   print(f"LR: {LR}")
   print(f"EPOCHS: {EPOCHS}")
