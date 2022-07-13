@@ -136,7 +136,7 @@ def main():
   torch.quantization.convert(quantized_model, inplace=True)
   quantized_model.eval()
 
-  input_fp32 = torch.randn((1, 3, 224, 224), dtype=torch.float32, device="cpu")
+  input_fp32 = torch.randn((1, 3, INPUT_SIZE, INPUT_SIZE), dtype=torch.float32, device="cpu")
   quantized_model(input_fp32)
 
   # save int8 model
