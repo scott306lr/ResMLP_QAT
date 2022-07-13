@@ -82,7 +82,7 @@ def main():
   cudnn.benchmark = True
 
   # build train/val dataset
-  # create sampler (if dataset from tfds, can't apply sampler) (distributed ver. to be done)
+  # create sampler (if dataset from tfds, can't apply sampler)
   # build up dataloader
   if not TFDS:
     from datasets import data_loader
