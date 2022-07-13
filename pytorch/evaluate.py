@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 import numpy as np
 
 from run_model import evaluate_model
-from run_model import load_torchscript_model
+from run_model import save_model, load_model, load_torchscript_model
 
 import resmlp
 from timm.models import create_model
@@ -25,14 +25,13 @@ class QuantizedResMLP(nn.Module):
 
 def main():
   parser = ArgumentParser(description="Quantize Aware Training for ResMLP, also supports tfds datasets.")
-  parser.add_argument('--dict_path',  default='ResMLP_S24_ReLU_99dense.pth',  help='Location of int8 model weight.')
+  parser.add_argument('--dict_path',  default='qat_weights/qat_Test1.pth',    help='Location of int8 model weight.')
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
   parser.add_argument('--tfds',       default=False,  type=bool,              help='Enable if dataset is from tfds.')
   parser.add_argument('--batch_size', default=32,     type=int,               help='Dataset batch size.')
   parser.add_argument('--input_size', default=224,    type=int,               help='Model input size.')
   parser.add_argument('--epochs',     default=5,      type=int,               help='Epochs, will generate a .pth file on each epoch.')
-  parser.add_argument('--lr',         default=1e-4,   type=float,             help='Learning rate.')
   parser.add_argument('--workers',    default=0,      type=int,               help='Workers, for parallel computing.')
   args = parser.parse_args()
   
@@ -44,16 +43,16 @@ def main():
   BATCH_SIZE = args.batch_size
   INPUT_SIZE = args.input_size
   EPOCHS     = args.epochs
-  LR         = args.lr
 
   WORKERS    = args.workers
-    
+  
+  print(f"DICT_PATH: {DICT_PATH}")
   print(f"BATCH_SIZE: {BATCH_SIZE}")
-  print(f"LR: {LR}")
   print(f"EPOCHS: {EPOCHS}")
 
   # device = CUDA
-  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  device = "cpu"
   print("Device:", device)
 
   # set seed
@@ -87,7 +86,8 @@ def main():
     )
 
   # # create model
-  # model = create_model('resmlp_24', num_classes=NUM_CLASSES).cuda()
+  # model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
+  # model = load_model(model, DICT_PATH, device)
 
   # # fuse
   # fused_model = model#copy.deepcopy(model)
@@ -102,13 +102,13 @@ def main():
   # quantized_model = QuantizedResMLP(model_fp32=fused_model)
 
   # load and evaluate
-  quantized_model = load_torchscript_model(model_filepath='DICT_PATH', device="cpu")
+  quantized_model = load_torchscript_model(model_filepath=DICT_PATH, device=device)
   quantized_model.eval()
   
-  criterion = nn.CrossEntropyLoss().cuda()
+  criterion = nn.CrossEntropyLoss()
   eval_loss, top1_acc, top5_acc = evaluate_model(model=quantized_model,
                                                   test_loader=data_loader_val,
-                                                  device="cpu",
+                                                  device=device,
                                                   criterion=criterion)
   print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
       -1, eval_loss, top1_acc, top5_acc))

@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 import numpy as np
 
 from run_model import qat_train_model
-from run_model import save_torchscript_model
+from run_model import load_model, save_torchscript_model
 
 import wandb
 import resmlp
@@ -26,7 +26,7 @@ class QuantizedResMLP(nn.Module):
 
 def main():
   parser = ArgumentParser(description="Quantize Aware Training for ResMLP, also supports tfds datasets.")
-  parser.add_argument('--dict_path',  default='ResMLP_S24_ReLU_99dense.pth',  help='Location of fp32 model weight.')
+  parser.add_argument('--dict_path',  default='ResMLP_S24_ReLU_fp32_80.602.pth',  help='Location of fp32 model weight.')
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
   parser.add_argument('--tfds',       default=False,  type=bool,              help='Enable if dataset is from tfds.')
@@ -65,6 +65,7 @@ def main():
   }
 
   # status
+  print(f"DICT_PATH: {DICT_PATH}")
   print(f"BATCH_SIZE: {BATCH_SIZE}")
   print(f"LR: {LR}")
   print(f"EPOCHS: {EPOCHS}")
@@ -104,8 +105,8 @@ def main():
     )
 
   # create model
-  model = create_model('resmlp_24', num_classes=NUM_CLASSES).cuda()
-  model.load_state_dict(torch.load(DICT_PATH), strict=False)
+  model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
+  model = load_model(model, DICT_PATH, device)
 
   # fuse
   fused_model = model#copy.deepcopy(model)
