@@ -143,18 +143,6 @@ def main():
                           model_dir='qat_weights', 
                           model_filename='qat_Test1.pth')
 
-  # # load
-  # quantized_model = load_torchscript_model(model_filepath='qat_weights/qat_Test0.pth', device="cpu")
-  # quantized_model.eval()
-
-  # criterion = nn.CrossEntropyLoss().cuda()
-  # eval_loss, top1_acc, top5_acc = evaluate_model(model=quantized_model,
-  #                                                 test_loader=data_loader_val,
-  #                                                 device="cpu",
-  #                                                 criterion=criterion)
-  # print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
-  #     -1, eval_loss, top1_acc, top5_acc))
-
 if __name__ == "__main__":
     main()
 
