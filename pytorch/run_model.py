@@ -16,7 +16,7 @@ from timm.loss import SoftTargetCrossEntropy
 import wandb
 
 
-def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1, save_dir='fp32_weights'):
+def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1, save_dir='qat_weights'):
     model.to(device)
     train_criterion = CrossEntropyLoss()
     eval_criterion  = CrossEntropyLoss()

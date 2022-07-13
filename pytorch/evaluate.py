@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 import numpy as np
 
 from run_model import evaluate_model
-from run_model import save_model, load_model, load_torchscript_model
+from run_model import save_model, load_model, load_torchscript_model, save_torchscript_model
 
 import resmlp
 from timm.models import create_model
@@ -112,6 +112,10 @@ def main():
                                                   criterion=criterion)
   print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
       -1, eval_loss, top1_acc, top5_acc))
+
+  save_torchscript_model(model=quantized_model, 
+                          model_dir='qat_weights', 
+                          model_filename='qat_Test1.pth')
 
 if __name__ == "__main__":
     main()

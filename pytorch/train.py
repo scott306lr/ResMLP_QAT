@@ -26,7 +26,7 @@ class QuantizedResMLP(nn.Module):
 
 def main():
   parser = ArgumentParser(description="Quantize Aware Training for ResMLP, also supports tfds datasets.")
-  parser.add_argument('--dict_path',  default='ResMLP_S24_ReLU_fp32_80.602.pth',  help='Location of fp32 model weight.')
+  parser.add_argument('--dict_path',  default='fp32_weights/ResMLP_S24_ReLU_fp32_80.602.pth',  help='Location of fp32 model weight.')
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
   parser.add_argument('--tfds',       default=False,  type=bool,              help='Enable if dataset is from tfds.')
@@ -36,7 +36,7 @@ def main():
   parser.add_argument('--lr',         default=1e-4,   type=float,             help='Learning rate.')
   parser.add_argument('--mixup',      default=True,   type=bool,              help='Enable mixup on training.')
   parser.add_argument('--workers',    default=0,      type=int,               help='Workers, for parallel computing.')
-  parser.add_argument('--save_dir',   default='fp32_weights',                 help='Directory to save after each epoch.')
+  parser.add_argument('--save_dir',   default='qat_weights',                 help='Directory to save after each epoch.')
   parser.add_argument('--per_save',   default=10,     type=int,               help='Amount of data to train before jumping to next epoch.')
   args = parser.parse_args()
   
@@ -131,18 +131,15 @@ def main():
   torch.quantization.prepare_qat(quantized_model, inplace=True)
   quantized_model = qat_train_model(quantized_model, data_loader_train, data_loader_val, LR, EPOCHS, NUM_CLASSES, device, with_mixup=WITH_MIXUP, save_interval=PER_SAVE, save_dir=SAVE_DIR)
 
-  # convert weight to int8, replace model to quantized ver.
-  quantized_model.cpu()
-  torch.quantization.convert(quantized_model, inplace=True)
-  quantized_model.eval()
+  # # convert weight to int8, replace model to quantized ver.
+  # quantized_model.cpu()
+  # torch.quantization.convert(quantized_model, inplace=True)
+  # quantized_model.eval()
 
-  input_fp32 = torch.randn((1, 3, INPUT_SIZE, INPUT_SIZE), dtype=torch.float32, device="cpu")
-  quantized_model(input_fp32)
-
-  # save int8 model
-  save_torchscript_model(model=quantized_model, 
-                          model_dir='qat_weights', 
-                          model_filename='qat_Test1.pth')
+  # # save int8 model
+  # save_torchscript_model(model=quantized_model, 
+  #                         model_dir='qat_weights', 
+  #                         model_filename='qat_Test1.pth')
 
 if __name__ == "__main__":
     main()
