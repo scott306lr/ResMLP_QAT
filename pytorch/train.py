@@ -7,20 +7,21 @@ import numpy as np
 from run_model import qat_train_model
 from run_model import load_model, save_torchscript_model
 
-import wandb
 import resmlp
 from timm.models import create_model
 
+import wandb
+
 class QuantizedResMLP(nn.Module):
-    def __init__(self, model_fp32):
+    def __init__(self, module):
         super(QuantizedResMLP, self).__init__()
         self.quant = torch.quantization.QuantStub()
         self.dequant = torch.quantization.DeQuantStub()
-        self.model_fp32 = model_fp32
+        self.module = module
 
     def forward(self, x):
         x = self.quant(x)
-        x = self.model_fp32(x)
+        x = self.module(x)
         x = self.dequant(x)
         return x
 
@@ -29,15 +30,16 @@ def main():
   parser.add_argument('--dict_path',  default='fp32_weights/ResMLP_S24_ReLU_fp32_80.602.pth',  help='Location of fp32 model weight.')
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
-  parser.add_argument('--tfds',       default=False,  type=bool,              help='Enable if dataset is from tfds.')
+  parser.add_argument('--tfds',       default=False,  action='store_true',    help='Enable if dataset is from tfds.')
   parser.add_argument('--batch_size', default=32,     type=int,               help='Dataset batch size.')
   parser.add_argument('--input_size', default=224,    type=int,               help='Model input size.')
   parser.add_argument('--epochs',     default=5,      type=int,               help='Epochs, will generate a .pth file on each epoch.')
   parser.add_argument('--lr',         default=1e-4,   type=float,             help='Learning rate.')
-  parser.add_argument('--mixup',      default=True,   type=bool,              help='Enable mixup on training.')
+  parser.add_argument('--mixup',      default=False,  action='store_true',    help='Enable mixup on training.')
   parser.add_argument('--workers',    default=0,      type=int,               help='Workers, for parallel computing.')
-  parser.add_argument('--save_dir',   default='qat_weights',                 help='Directory to save after each epoch.')
+  parser.add_argument('--save_dir',   default='qat_weights',                  help='Directory to save after each epoch.')
   parser.add_argument('--per_save',   default=10,     type=int,               help='Amount of data to train before jumping to next epoch.')
+  parser.add_argument('--wandb',      default=False,  action='store_true',    help='Run with wandb.')
   args = parser.parse_args()
   
   DICT_PATH  = args.dict_path 
@@ -54,15 +56,19 @@ def main():
   WORKERS    = args.workers
   SAVE_DIR   = args.save_dir
   PER_SAVE   = args.per_save
+
+  WANDB      = args.wandb
     
-  # wandb login
-  # wandb.login(key=)
-  wandb.init(project="resmlp_qat")
-  wandb.config = {
-    "learning_rate": LR,
-    "epochs": EPOCHS,
-    "batch_size": BATCH_SIZE
-  }
+  print(WANDB)
+  # if WANDB:
+  #   # wandb login
+  #   # wandb.login(key=)
+  #   wandb.init(project="resmlp_qat")
+  #   wandb.config = {
+  #     "learning_rate": LR,
+  #     "epochs": EPOCHS,
+  #     "batch_size": BATCH_SIZE
+  #   }
 
   # status
   print(f"DICT_PATH: {DICT_PATH}")
@@ -105,12 +111,11 @@ def main():
     )
 
   # create model
-  model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
-  model = load_model(model, DICT_PATH, device)
+  float_model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
+  float_model = load_model(float_model, DICT_PATH, device)
 
   # fuse
-  fused_model = model#copy.deepcopy(model)
-  for basic_block_name, basic_block in fused_model.blocks.named_children():
+  for basic_block_name, basic_block in float_model.blocks.named_children():
     for sub_block_name, sub_block in basic_block.named_children():
       if sub_block_name == "mlp":
         torch.quantization.fuse_modules(
@@ -118,21 +123,20 @@ def main():
           inplace=True)
 
   # apply quant/dequant stabs
-  # equivalent to torch.quantization.add_quant_dequant(fused_model)
-  quantized_model = QuantizedResMLP(model_fp32=fused_model)
-  quantized_model.train()
+  #float_model1 = torch.quantization.add_quant_dequant(float_model)
+  float_model = QuantizedResMLP(module=float_model)
 
   # quantization configurations
-  quantized_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
-  print(quantized_model.qconfig)
+  float_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
+  print(float_model.qconfig)
 
   # train & save fp32 model on each epoch
-  print("Training QAT Model...")
+  print("Training Model with QAT...")
+  quantized_model = torch.quantization.prepare_qat(float_model, inplace=False)
   quantized_model.train()
-  torch.quantization.prepare_qat(quantized_model, inplace=True)
-  quantized_model = qat_train_model(quantized_model, data_loader_train, data_loader_val, LR, EPOCHS, NUM_CLASSES, device, with_mixup=WITH_MIXUP, save_interval=PER_SAVE, save_dir=SAVE_DIR)
+  quantized_model = qat_train_model(quantized_model, data_loader_train, data_loader_val, LR, EPOCHS, NUM_CLASSES, device, with_mixup=WITH_MIXUP, save_interval=PER_SAVE, save_dir=SAVE_DIR, wandb=WANDB)
 
-  # # convert weight to int8, replace model to quantized ver.
+  # convert weight to int8, replace model to quantized ver.
   # quantized_model.cpu()
   # torch.quantization.convert(quantized_model, inplace=True)
   # quantized_model.eval()

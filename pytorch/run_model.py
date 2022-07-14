@@ -1,5 +1,6 @@
 import math
 import sys, os
+from xmlrpc.client import Boolean
 from tqdm import tqdm
 
 import torch
@@ -16,7 +17,7 @@ from timm.loss import SoftTargetCrossEntropy
 import wandb
 
 
-def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1, save_dir='qat_weights'):
+def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1, save_dir='qat_weights', wandb=False):
     model.to(device)
     train_criterion = CrossEntropyLoss()
     eval_criterion  = CrossEntropyLoss()
@@ -43,12 +44,20 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
         train_one_epoch(model=model, criterion=train_criterion,
                   data_loader=train_loader, optimizer=optimizer,
                   device=device, epoch=1, max_norm=None, start=epoch*save_interval, stop=(epoch+1)*save_interval,
-                  model_ema=None, mixup_fn=mixup_fn)
+                  model_ema=None, mixup_fn=mixup_fn, use_wandb=wandb)
 
         # Evaluation
         model.cpu()
         qmodel = torch.quantization.convert(model, inplace=False)
         qmodel.eval()
+        print("--- before ---")
+        print(qmodel)
+        #save_torchscript_model(qmodel, save_dir, "test.pt")
+        save_model(qmodel, save_dir, "test.pt")
+        qmodel = load_model(qmodel, "qat_weights/test.pt", "cpu")
+        #qmodel = load_torchscript_model("qat_weights/test.pt", "cpu")
+        print("--- after ---")
+        print(qmodel)
         eval_loss, top1_acc, top5_acc = evaluate_model(model=qmodel,
                                                 test_loader=test_loader,
                                                 device="cpu",
@@ -66,7 +75,7 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
 def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0,  start: int = 0, stop: int = -1, 
-                    model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None):
+                    model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, use_wandb: bool = False):
     model.train()
     model.to(device)
     
@@ -97,7 +106,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
             output_str = "i: {:02d} Eval Loss: {:.3f}".format(i, loss_val)
         pbar.set_description(output_str)
 
-        if i % 10 == 0:
+        if use_wandb and i % 10 == 0:
             wandb.log({"loss": loss_val})
 
         if not math.isfinite(loss.item()):
