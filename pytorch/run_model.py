@@ -42,7 +42,7 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
         model.train()
         train_one_epoch(model=model, criterion=train_criterion,
                   train_loader=train_loader, test_loader=test_loader, optimizer=optimizer,
-                  device=device, epoch=1, max_norm=None, save_interval=save_interval,
+                  device=device, epoch=1, max_norm=None, save_interval=save_interval, save_dir=save_dir,
                   model_ema=None, mixup_fn=mixup_fn, use_wandb=wandb)
         scheduler.step()
 
@@ -58,6 +58,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
     
     pbar = tqdm(train_loader, leave=False)
     for i, (inputs, labels) in enumerate(pbar):
+        model.to(device)
         inputs = inputs.to(device)
         labels = labels.to(device)
         optimizer.zero_grad()
