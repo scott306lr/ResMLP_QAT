@@ -33,7 +33,7 @@ def main():
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
   parser.add_argument('--tfds',       default=False,  type=bool,              help='Enable if dataset is from tfds.')
-  parser.add_argument('--batch_size', default=32,     type=int,               help='Dataset batch size.')
+  parser.add_argument('--batch_size', default=64,     type=int,               help='Dataset batch size.')
   parser.add_argument('--input_size', default=224,    type=int,               help='Model input size.')
   parser.add_argument('--epochs',     default=5,      type=int,               help='Epochs, will generate a .pth file on each epoch.')
   parser.add_argument('--lr',         default=1e-4,   type=float,             help='Learning rate.')
