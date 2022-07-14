@@ -15,15 +15,15 @@ import torch.quantization
 import torch.quantization._numeric_suite as ns
 
 class QuantizedResMLP(nn.Module):
-    def __init__(self, model_fp32):
+    def __init__(self, module):
         super(QuantizedResMLP, self).__init__()
         self.quant = torch.quantization.QuantStub()
         self.dequant = torch.quantization.DeQuantStub()
-        self.model_fp32 = model_fp32
+        self.module = module
 
     def forward(self, x):
         x = self.quant(x)
-        x = self.model_fp32(x)
+        x = self.module(x)
         x = self.dequant(x)
         return x
 

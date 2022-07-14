@@ -20,11 +20,11 @@ import wandb
 def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1, save_dir='qat_weights', wandb=False):
     model.to(device)
     train_criterion = CrossEntropyLoss()
-    eval_criterion  = CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(),
                             lr=learning_rate,
                             momentum=0.9,
                             weight_decay=1e-4)
+    # will never reach milestone since we use only few epochs
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                         milestones=[100, 150],
                                                         gamma=0.1,
@@ -39,55 +39,25 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
             label_smoothing=0.1, num_classes=num_classes)
 
     for epoch in tqdm(range(epochs)):
-        # Training
         model.train()
         train_one_epoch(model=model, criterion=train_criterion,
-                  data_loader=train_loader, optimizer=optimizer,
-                  device=device, epoch=1, max_norm=None, start=epoch*save_interval, stop=(epoch+1)*save_interval,
+                  train_loader=train_loader, test_loader=test_loader, optimizer=optimizer,
+                  device=device, epoch=1, max_norm=None, save_interval=save_interval,
                   model_ema=None, mixup_fn=mixup_fn, use_wandb=wandb)
-
-        # Evaluation
-        model.cpu()
-        qmodel = torch.quantization.convert(model, inplace=False)
-        qmodel.eval()
-        print("--- before ---")
-        print(qmodel)
-        #save_torchscript_model(qmodel, save_dir, "test.pt")
-        #save_model(qmodel, save_dir, "test.pt")
-        #qmodel = load_model(qmodel, "qat_weights/test.pt", "cpu")
-        #qmodel = load_torchscript_model("qat_weights/test.pt", "cpu")
-        print("--- after ---")
-        print(qmodel)
-        # eval_loss, top1_acc, top5_acc = evaluate_model(model=qmodel,
-        #                                         test_loader=test_loader,
-        #                                         device="cpu",
-        #                                         criterion=eval_criterion)
-        # print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
-        #     epoch, eval_loss, top1_acc, top5_acc))
-        
-        # fname = 'epoch{:d}_{:.3f}_{:.3f}_{:.3f}.pth'.format(
-        #     epoch, eval_loss, top1_acc, top5_acc)
-        fname = "test.pth"
-        #save_torchscript_model(qmodel, save_dir, fname)
-        save_model(qmodel, save_dir, fname)
         scheduler.step()
-        
+
     return model
 
 def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
-                    data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0,  start: int = 0, stop: int = -1, 
+                    train_loader: Iterable, test_loader: Iterable, optimizer: torch.optim.Optimizer,
+                    device: torch.device, epoch: int, max_norm: float = 0,  save_interval: int = -1, save_dir: str='qat_weights',
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, use_wandb: bool = False):
+    eval_criterion  = CrossEntropyLoss()                
     model.train()
     model.to(device)
     
-    pbar = tqdm(data_loader, leave=False)
+    pbar = tqdm(train_loader, leave=False)
     for i, (inputs, labels) in enumerate(pbar):
-        if i < start:
-            continue 
-        if i == stop: 
-            break
-
         inputs = inputs.to(device)
         labels = labels.to(device)
         optimizer.zero_grad()
@@ -97,27 +67,54 @@ def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
 
         outputs = model(inputs)
         loss = criterion(outputs, labels)
+        loss_val = loss.item()
+
         loss.backward()
         optimizer.step()
+
+        if model_ema is not None:
+            model_ema.update(model)
         
-        loss_val = loss.item()
-        if i % 10 == 0 and mixup_fn is None:
-            prec1, prec5 = accuracy(outputs.data, labels.data, topk=(1, 5))
+        if not math.isfinite(loss.item()):
+            print("Loss is {}, stopping training".format(loss_val))
+            sys.exit(1)
+
+        # calculate loss and accuracy
+        if i % 10 == 0:
+            if mixup_fn:
+                prec1, prec5 = accuracy(outputs.data, torch.argmax(labels.data, dim=1), topk=(1, 5))
+            else:
+                prec1, prec5 = accuracy(outputs.data, labels.data, topk=(1, 5))
             output_str = "i: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(i, loss_val, prec1, prec5)
         else:
             output_str = "i: {:02d} Eval Loss: {:.3f}".format(i, loss_val)
         pbar.set_description(output_str)
-
+        
+        # log
         if use_wandb and i % 10 == 0:
-            wandb.log({"loss": loss_val})
+            wandb.log({"train_loss": loss_val, "train_acc": prec1})
 
-        if not math.isfinite(loss.item()):
-            print("Loss is {}, stopping training".format(loss.item()))
-            sys.exit(1)
+        # Evaluation
+        if i > 0 and i % save_interval == 0: 
+            model.cpu()
+            qmodel = torch.quantization.convert(model, inplace=False)
+            qmodel.eval()
 
-        #torch.cuda.synchronize()
-        if model_ema is not None:
-            model_ema.update(model)
+            eval_loss, top1_acc, top5_acc = evaluate_model(model=qmodel,
+                                                    test_loader=test_loader,
+                                                    device="cpu",
+                                                    criterion=eval_criterion)
+            print("Epoch: {:d} Iter: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
+                epoch, i, eval_loss, top1_acc, top5_acc))
+            
+            # log
+            if use_wandb:
+                wandb.log({"test_loss": eval_loss, "test_acc": top1_acc})
+
+            # save
+            fname = 'acc{:.3f}_loss{:.3f}_e{:d}_i{:d}.pth'.format(
+                top1_acc, eval_loss, epoch, i)
+            save_model(qmodel, save_dir, fname)
 
     return
 

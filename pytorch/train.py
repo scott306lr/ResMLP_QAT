@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
+from torch.quantization.qconfig import QConfig
+from torch.quantization.fake_quantize import FakeQuantize
+from torch.quantization.observer import MovingAverageMinMaxObserver
+
 from argparse import ArgumentParser
 import numpy as np
 
@@ -31,12 +35,12 @@ def main():
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
   parser.add_argument('--tfds',       default=False,  action='store_true',    help='Enable if dataset is from tfds.')
-  parser.add_argument('--batch_size', default=32,     type=int,               help='Dataset batch size.')
+  parser.add_argument('--batch_size', default=64,     type=int,               help='Dataset batch size.')
   parser.add_argument('--input_size', default=224,    type=int,               help='Model input size.')
   parser.add_argument('--epochs',     default=5,      type=int,               help='Epochs, will generate a .pth file on each epoch.')
-  parser.add_argument('--lr',         default=1e-4,   type=float,             help='Learning rate.')
+  parser.add_argument('--lr',         default=1e-6,   type=float,             help='Learning rate.')
   parser.add_argument('--mixup',      default=False,  action='store_true',    help='Enable mixup on training.')
-  parser.add_argument('--workers',    default=0,      type=int,               help='Workers, for parallel computing.')
+  parser.add_argument('--workers',    default=8,      type=int,               help='Workers, for parallel computing.')
   parser.add_argument('--save_dir',   default='qat_weights',                  help='Directory to save after each epoch.')
   parser.add_argument('--per_save',   default=10,     type=int,               help='Amount of data to train before jumping to next epoch.')
   parser.add_argument('--wandb',      default=False,  action='store_true',    help='Run with wandb.')
@@ -59,22 +63,24 @@ def main():
 
   WANDB      = args.wandb
     
-  print(WANDB)
-  # if WANDB:
-  #   # wandb login
-  #   # wandb.login(key=)
-  #   wandb.init(project="resmlp_qat")
-  #   wandb.config = {
-  #     "learning_rate": LR,
-  #     "epochs": EPOCHS,
-  #     "batch_size": BATCH_SIZE
-  #   }
+  print(f"WANDB: {WANDB}")
+  if WANDB:
+    # wandb login
+    # wandb.login(key=)
+    wandb.init(project="resmlp_qat")
+    wandb.config = {
+      "learning_rate": LR,
+      "epochs": EPOCHS,
+      "batch_size": BATCH_SIZE
+    }
 
   # status
   print(f"DICT_PATH: {DICT_PATH}")
+  print(f"EPOCHS: {EPOCHS}")
   print(f"BATCH_SIZE: {BATCH_SIZE}")
   print(f"LR: {LR}")
-  print(f"EPOCHS: {EPOCHS}")
+  print(f"PER_SAVE: {PER_SAVE}")
+  print(f"WORKERS: {WORKERS}")
 
   # device = CUDA
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -127,7 +133,16 @@ def main():
   float_model = QuantizedResMLP(module=float_model)
 
   # quantization configurations
-  float_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
+  float_model.qconfig = QConfig(
+    activation=FakeQuantize.with_args(observer=MovingAverageMinMaxObserver, 
+                                  #quant_min=-128, quant_max=127, dtype=torch.qint8,
+                                  quant_min=0, quant_max=255, dtype=torch.quint8, 
+                                  qscheme=torch.per_tensor_symmetric, reduce_range=False),
+    weight=FakeQuantize.with_args(observer=MovingAverageMinMaxObserver, 
+                                  quant_min=-128, quant_max=127, dtype=torch.qint8, 
+                                  #quant_min=0, quant_max=255, dtype=torch.quint8,
+                                  qscheme=torch.per_tensor_symmetric, reduce_range=False)
+  )
   print(float_model.qconfig)
 
   # train & save fp32 model on each epoch

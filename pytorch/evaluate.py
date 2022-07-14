@@ -11,15 +11,15 @@ import resmlp
 from timm.models import create_model
 
 class QuantizedResMLP(nn.Module):
-    def __init__(self, model_fp32):
+    def __init__(self, module):
         super(QuantizedResMLP, self).__init__()
         self.quant = torch.quantization.QuantStub()
         self.dequant = torch.quantization.DeQuantStub()
-        self.model_fp32 = model_fp32
+        self.module = module
 
     def forward(self, x):
         x = self.quant(x)
-        x = self.model_fp32(x)
+        x = self.module(x)
         x = self.dequant(x)
         return x
 
@@ -87,7 +87,6 @@ def main():
 
   # create model
   float_model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
-  float_model = load_model(float_model, DICT_PATH, device)
 
   # fuse
   for basic_block_name, basic_block in float_model.blocks.named_children():
@@ -106,7 +105,6 @@ def main():
   print(float_model.qconfig)
 
   # train & save fp32 model on each epoch
-  print("Training Model with QAT...")
   quantized_model = torch.quantization.prepare_qat(float_model, inplace=False)
 
   # convert weight to int8, replace model to quantized ver.
@@ -115,9 +113,11 @@ def main():
   quantized_model.eval()
 
   # load and evaluate
+  print("Loading Model...")
   quantized_model = load_model(quantized_model, model_filepath=DICT_PATH, device=device)
   quantized_model.eval()
   
+  print("Start evaluating...")
   criterion = nn.CrossEntropyLoss()
   eval_loss, top1_acc, top5_acc = evaluate_model(model=quantized_model,
                                                   test_loader=data_loader_val,
@@ -126,9 +126,9 @@ def main():
   print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
       -1, eval_loss, top1_acc, top5_acc))
 
-  save_torchscript_model(model=quantized_model, 
-                          model_dir='qat_weights', 
-                          model_filename='qat_Test1.pth')
+  save_model(model=quantized_model, 
+                model_dir='qat_weights', 
+                model_filename='qat_Test1.pth')
 
 if __name__ == "__main__":
     main()
