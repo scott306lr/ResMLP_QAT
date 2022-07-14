@@ -24,11 +24,10 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
                             lr=learning_rate,
                             momentum=0.9,
                             weight_decay=1e-4)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
-    #                                                     milestones=[100, 150],
-    #                                                     gamma=0.1,
-    #                                                     last_epoch=-1)   
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                                                        milestones=[100, 150],
+                                                        gamma=0.1,
+                                                        last_epoch=-1)     
     # additional data augmentation (mixup)
     mixup_fn = None
     if with_mixup:
