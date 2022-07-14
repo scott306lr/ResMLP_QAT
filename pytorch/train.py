@@ -118,6 +118,7 @@ def main():
           inplace=True)
 
   # apply quant/dequant stabs
+  # equivalent to torch.quantization.add_quant_dequant(fused_model)
   quantized_model = QuantizedResMLP(model_fp32=fused_model)
   quantized_model.train()
 
