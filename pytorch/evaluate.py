@@ -28,7 +28,7 @@ def main():
   parser.add_argument('--dict_path',  default='qat_weights/epoch2_1.010_78.132_93.728.pth',    help='Location of int8 model weight.')
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
-  parser.add_argument('--tfds',       default=False,  type=bool,              help='Enable if dataset is from tfds.')
+  parser.add_argument('--tfds',       default=False,  action='store_true',    help='Enable if dataset is from tfds.')
   parser.add_argument('--batch_size', default=32,     type=int,               help='Dataset batch size.')
   parser.add_argument('--input_size', default=224,    type=int,               help='Model input size.')
   parser.add_argument('--epochs',     default=5,      type=int,               help='Epochs, will generate a .pth file on each epoch.')
@@ -85,24 +85,37 @@ def main():
         num_workers=WORKERS,
     )
 
-  # # create model
-  # model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
-  # model = load_model(model, DICT_PATH, device)
+  # create model
+  float_model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
+  float_model = load_model(float_model, DICT_PATH, device)
 
-  # # fuse
-  # fused_model = model#copy.deepcopy(model)
-  # for basic_block_name, basic_block in fused_model.blocks.named_children():
-  #   for sub_block_name, sub_block in basic_block.named_children():
-  #     if sub_block_name == "mlp":
-  #       torch.quantization.fuse_modules(
-  #         sub_block, [['fc1', 'act']],
-  #         inplace=True)
+  # fuse
+  for basic_block_name, basic_block in float_model.blocks.named_children():
+    for sub_block_name, sub_block in basic_block.named_children():
+      if sub_block_name == "mlp":
+        torch.quantization.fuse_modules(
+          sub_block, [['fc1', 'act']],
+          inplace=True)
 
-  # # apply quant/dequant stabs
-  # quantized_model = QuantizedResMLP(model_fp32=fused_model)
+  # apply quant/dequant stabs
+  #float_model1 = torch.quantization.add_quant_dequant(float_model)
+  float_model = QuantizedResMLP(module=float_model)
+
+  # quantization configurations
+  float_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
+  print(float_model.qconfig)
+
+  # train & save fp32 model on each epoch
+  print("Training Model with QAT...")
+  quantized_model = torch.quantization.prepare_qat(float_model, inplace=False)
+
+  # convert weight to int8, replace model to quantized ver.
+  quantized_model.cpu()
+  torch.quantization.convert(quantized_model, inplace=True)
+  quantized_model.eval()
 
   # load and evaluate
-  quantized_model = load_torchscript_model(model_filepath=DICT_PATH, device=device)
+  quantized_model = load_model(quantized_model, model_filepath=DICT_PATH, device=device)
   quantized_model.eval()
   
   criterion = nn.CrossEntropyLoss()

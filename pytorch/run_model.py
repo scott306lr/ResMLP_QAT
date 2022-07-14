@@ -53,21 +53,23 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
         print("--- before ---")
         print(qmodel)
         #save_torchscript_model(qmodel, save_dir, "test.pt")
-        save_model(qmodel, save_dir, "test.pt")
-        qmodel = load_model(qmodel, "qat_weights/test.pt", "cpu")
+        #save_model(qmodel, save_dir, "test.pt")
+        #qmodel = load_model(qmodel, "qat_weights/test.pt", "cpu")
         #qmodel = load_torchscript_model("qat_weights/test.pt", "cpu")
         print("--- after ---")
         print(qmodel)
-        eval_loss, top1_acc, top5_acc = evaluate_model(model=qmodel,
-                                                test_loader=test_loader,
-                                                device="cpu",
-                                                criterion=eval_criterion)
-        print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
-            epoch, eval_loss, top1_acc, top5_acc))
+        # eval_loss, top1_acc, top5_acc = evaluate_model(model=qmodel,
+        #                                         test_loader=test_loader,
+        #                                         device="cpu",
+        #                                         criterion=eval_criterion)
+        # print("Epoch: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(
+        #     epoch, eval_loss, top1_acc, top5_acc))
         
-        fname = 'epoch{:d}_{:.3f}_{:.3f}_{:.3f}.pth'.format(
-            epoch, eval_loss, top1_acc, top5_acc)
-        save_torchscript_model(qmodel, save_dir, fname)
+        # fname = 'epoch{:d}_{:.3f}_{:.3f}_{:.3f}.pth'.format(
+        #     epoch, eval_loss, top1_acc, top5_acc)
+        fname = "test.pth"
+        #save_torchscript_model(qmodel, save_dir, fname)
+        save_model(qmodel, save_dir, fname)
         scheduler.step()
         
     return model
