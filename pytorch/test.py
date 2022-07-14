@@ -11,6 +11,9 @@ import wandb
 import resmlp
 from timm.models import create_model
 
+import torch.quantization
+import torch.quantization._numeric_suite as ns
+
 class QuantizedResMLP(nn.Module):
     def __init__(self, model_fp32):
         super(QuantizedResMLP, self).__init__()
@@ -54,15 +57,6 @@ def main():
   WORKERS    = args.workers
   SAVE_DIR   = args.save_dir
   PER_SAVE   = args.per_save
-    
-  # wandb login
-  # wandb.login(key=)
-  wandb.init(project="resmlp_qat")
-  wandb.config = {
-    "learning_rate": LR,
-    "epochs": EPOCHS,
-    "batch_size": BATCH_SIZE
-  }
 
   # status
   print(f"DICT_PATH: {DICT_PATH}")
@@ -105,12 +99,11 @@ def main():
     )
 
   # create model
-  model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
-  model = load_model(model, DICT_PATH, device)
+  float_model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
+  float_model = load_model(float_model, DICT_PATH, device)
 
   # fuse
-  fused_model = model#copy.deepcopy(model)
-  for basic_block_name, basic_block in fused_model.blocks.named_children():
+  for basic_block_name, basic_block in float_model.blocks.named_children():
     for sub_block_name, sub_block in basic_block.named_children():
       if sub_block_name == "mlp":
         torch.quantization.fuse_modules(
@@ -118,29 +111,27 @@ def main():
           inplace=True)
 
   # apply quant/dequant stabs
-  # equivalent to torch.quantization.add_quant_dequant(fused_model)
-  quantized_model = QuantizedResMLP(model_fp32=fused_model)
-  quantized_model.train()
+  float_model = torch.quantization.add_quant_dequant(float_model)
 
   # quantization configurations
-  quantized_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
-  print(quantized_model.qconfig)
+  float_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
+  print(float_model.qconfig)
 
   # train & save fp32 model on each epoch
-  print("Training QAT Model...")
+  print("Training Model with QAT...")
+  quantized_model = torch.quantization.prepare_qat(float_model, inplace=False)
   quantized_model.train()
-  torch.quantization.prepare_qat(quantized_model, inplace=True)
-  quantized_model = qat_train_model(quantized_model, data_loader_train, data_loader_val, LR, EPOCHS, NUM_CLASSES, device, with_mixup=WITH_MIXUP, save_interval=PER_SAVE, save_dir=SAVE_DIR)
+  #quantized_model = qat_train_model(quantized_model, data_loader_train, data_loader_val, LR, EPOCHS, NUM_CLASSES, device, with_mixup=WITH_MIXUP, save_interval=PER_SAVE, save_dir=SAVE_DIR)
 
-  # # convert weight to int8, replace model to quantized ver.
-  # quantized_model.cpu()
-  # torch.quantization.convert(quantized_model, inplace=True)
-  # quantized_model.eval()
+  # convert weight to int8, replace model to quantized ver.
+  quantized_model.cpu()
+  torch.quantization.convert(quantized_model, inplace=True)
+  quantized_model.eval()
 
-  # # save int8 model
-  # save_torchscript_model(model=quantized_model, 
-  #                         model_dir='qat_weights', 
-  #                         model_filename='qat_Test1.pth')
+  wt_compare_dict = ns.compare_weights(float_model.state_dict(), quantized_model.state_dict())
+  print('keys of wt_compare_dict:')
+  print(wt_compare_dict.keys())
+
 
 if __name__ == "__main__":
     main()
