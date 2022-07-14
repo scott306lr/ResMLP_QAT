@@ -25,7 +25,7 @@ class QuantizedResMLP(nn.Module):
 
 def main():
   parser = ArgumentParser(description="Quantize Aware Training for ResMLP, also supports tfds datasets.")
-  parser.add_argument('--dict_path',  default='qat_weights/qat_Test1.pth',    help='Location of int8 model weight.')
+  parser.add_argument('--dict_path',  default='qat_weights/epoch2_1.010_78.132_93.728.pth',    help='Location of int8 model weight.')
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
   parser.add_argument('--tfds',       default=False,  type=bool,              help='Enable if dataset is from tfds.')
