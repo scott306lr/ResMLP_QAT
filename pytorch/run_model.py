@@ -38,7 +38,7 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
             prob=1.0, switch_prob=0.5, mode='batch',
             label_smoothing=0.1, num_classes=num_classes)
     
-    # Exponential 
+    # Exponential Moving Average (ema)
     model_ema = None
     if with_ema:
         model_ema = ModelEma(
