@@ -17,7 +17,7 @@ from timm.loss import SoftTargetCrossEntropy
 import wandb
 
 
-def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, save_interval=-1, save_dir='qat_weights', wandb=False):
+def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num_classes, device, with_mixup, with_ema, log_interval=10, save_interval=-1, save_dir='qat_weights', wandb=False):
     model.to(device)
     train_criterion = CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(),
@@ -37,20 +37,29 @@ def qat_train_model(model, train_loader, test_loader, learning_rate, epochs, num
             mixup_alpha=0.8, cutmix_alpha=1.0, cutmix_minmax=None,
             prob=1.0, switch_prob=0.5, mode='batch',
             label_smoothing=0.1, num_classes=num_classes)
+    
+    # Exponential 
+    model_ema = None
+    if with_ema:
+        model_ema = ModelEma(
+            model,
+            decay=0.99996,
+            device='cpu',
+            resume='')
 
     for epoch in tqdm(range(epochs)):
         model.train()
         train_one_epoch(model=model, criterion=train_criterion,
                   train_loader=train_loader, test_loader=test_loader, optimizer=optimizer,
-                  device=device, epoch=epoch, max_norm=None, save_interval=save_interval, save_dir=save_dir,
-                  model_ema=None, mixup_fn=mixup_fn, use_wandb=wandb)
+                  device=device, epoch=epoch, max_norm=None, log_interval=log_interval, save_interval=save_interval, save_dir=save_dir,
+                  model_ema=model_ema, mixup_fn=mixup_fn, use_wandb=wandb)
         scheduler.step()
 
     return model
 
 def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
                     train_loader: Iterable, test_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0,  save_interval: int = -1, save_dir: str='qat_weights',
+                    device: torch.device, epoch: int, max_norm: float = 0,  log_interval: int = 10, save_interval: int = -1, save_dir: str='qat_weights',
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, use_wandb: bool = False):
     eval_criterion = CrossEntropyLoss()                
     model.train()
@@ -81,19 +90,19 @@ def train_one_epoch(model: torch.nn.Module, criterion: CrossEntropyLoss,
             sys.exit(1)
 
         # calculate loss and accuracy
-        if i % 10 == 0:
+        if i % log_interval == 0:
             if mixup_fn:
                 prec1, prec5 = accuracy(outputs.data, torch.argmax(labels.data, dim=1), topk=(1, 5))
             else:
                 prec1, prec5 = accuracy(outputs.data, labels.data, topk=(1, 5))
             output_str = "i: {:d} Eval Loss: {:.3f} Top1: {:.3f} Top5: {:.3f}".format(i, loss_val, prec1, prec5)
+
+            # log
+            if use_wandb:
+                wandb.log({"train_loss": loss_val, "train_acc": prec1})
         else:
             output_str = "i: {:02d} Eval Loss: {:.3f}".format(i, loss_val)
         pbar.set_description(output_str)
-        
-        # log
-        if use_wandb and i % 10 == 0:
-            wandb.log({"train_loss": loss_val, "train_acc": prec1})
 
         # Evaluation
         if i > 0 and i % save_interval == 0: 
