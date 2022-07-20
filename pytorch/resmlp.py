@@ -113,44 +113,20 @@ class resmlp_models(nn.Module):
         return x 
 
 @register_model
-def resmlp_12(pretrained=False, dist=False, **kwargs):
+def resmlp_12(pretrained=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=12,
         Patch_layer=PatchEmbed,
         init_scale=0.1,**kwargs)
     
     model.default_cfg = _cfg()
-    if pretrained:
-        if dist:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_12_dist.pth"
-        else:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_12_no_dist.pth"
-        checkpoint = torch.hub.load_state_dict_from_url(
-            url=url_path,
-            map_location="cpu", check_hash=True
-        )
-            
-        model.load_state_dict(checkpoint)
     return model
   
 @register_model
-def resmlp_24(pretrained=False,dist=False,dino=False, **kwargs):
+def resmlp_24(pretrained=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
         init_scale=1e-5,**kwargs)
     model.default_cfg = _cfg()
-    if pretrained:
-        if dist:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dist.pth"
-        elif dino:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dino.pth"
-        else:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_no_dist.pth"
-        checkpoint = torch.hub.load_state_dict_from_url(
-            url=url_path,
-            map_location="cpu", check_hash=True
-        )
-            
-        model.load_state_dict(checkpoint)
     return model

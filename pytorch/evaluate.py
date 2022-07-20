@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
+from torch.quantization.qconfig import QConfig
+from torch.quantization.fake_quantize import FakeQuantize
+from torch.quantization.observer import MovingAverageMinMaxObserver
+
 from argparse import ArgumentParser
 import numpy as np
 
@@ -25,7 +29,7 @@ class QuantizedResMLP(nn.Module):
 
 def main():
   parser = ArgumentParser(description="Quantize Aware Training for ResMLP, also supports tfds datasets.")
-  parser.add_argument('--dict_path',  default='qat_weights/epoch2_1.010_78.132_93.728.pth',    help='Location of int8 model weight.')
+  parser.add_argument('--dict_path',  default='qat_weights/mixup_ema_MAMMobs/acc75.020_loss1.434_e0_i600.pth',    help='Location of int8 model weight.')
   parser.add_argument('--data_name',  default='imagenet2012',                 help='Name of the dataset.')
   parser.add_argument('--data_dir',   default='/mnt/disk1/imagenet/',         help='Directory of the dataset.')
   parser.add_argument('--tfds',       default=False,  action='store_true',    help='Enable if dataset is from tfds.')
@@ -101,8 +105,16 @@ def main():
   float_model = QuantizedResMLP(module=float_model)
 
   # quantization configurations
-  float_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
-  print(float_model.qconfig)
+  float_model.qconfig = QConfig(
+    activation=FakeQuantize.with_args(observer=MovingAverageMinMaxObserver, 
+                                  #quant_min=-128, quant_max=127, dtype=torch.qint8,
+                                  quant_min=0, quant_max=255, dtype=torch.quint8, 
+                                  qscheme=torch.per_tensor_symmetric, reduce_range=False),
+    weight=FakeQuantize.with_args(observer=MovingAverageMinMaxObserver, 
+                                  quant_min=-128, quant_max=127, dtype=torch.qint8, 
+                                  #quant_min=0, quant_max=255, dtype=torch.quint8,
+                                  qscheme=torch.per_tensor_symmetric, reduce_range=False)
+  )
 
   # train & save fp32 model on each epoch
   quantized_model = torch.quantization.prepare_qat(float_model, inplace=False)
