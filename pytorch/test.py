@@ -79,28 +79,29 @@ def main():
   # build train/val dataset
   # create sampler (if dataset from tfds, can't apply sampler)
   # build up dataloader
-  if not TFDS:
-    from datasets import data_loader
-    data_loader_train, data_loader_val, NUM_CLASSES = data_loader(
-        name=DATA_NAME,
-        root=DATA_DIR,
-        input_size=INPUT_SIZE, 
-        batch_size=BATCH_SIZE,
-        num_workers=WORKERS,
-    )
-  else:
-    from datasets import tfds_data_loader
-    data_loader_train, data_loader_val, NUM_CLASSES = tfds_data_loader(
-        name=DATA_NAME,
-        root=DATA_DIR,
-        input_size=INPUT_SIZE, 
-        batch_size=BATCH_SIZE,
-        num_workers=WORKERS,
-    )
+  # if not TFDS:
+  #   from datasets import data_loader
+  #   data_loader_train, data_loader_val, NUM_CLASSES = data_loader(
+  #       name=DATA_NAME,
+  #       root=DATA_DIR,
+  #       input_size=INPUT_SIZE, 
+  #       batch_size=BATCH_SIZE,
+  #       num_workers=WORKERS,
+  #   )
+  # else:
+  #   from datasets import tfds_data_loader
+  #   data_loader_train, data_loader_val, NUM_CLASSES = tfds_data_loader(
+  #       name=DATA_NAME,
+  #       root=DATA_DIR,
+  #       input_size=INPUT_SIZE, 
+  #       batch_size=BATCH_SIZE,
+  #       num_workers=WORKERS,
+  #   )
+
+  NUM_CLASSES = 224
 
   # create model
   float_model = create_model('resmlp_24', num_classes=NUM_CLASSES).to(device)
-  float_model = load_model(float_model, DICT_PATH, device)
 
   # fuse
   for basic_block_name, basic_block in float_model.blocks.named_children():
@@ -111,7 +112,7 @@ def main():
           inplace=True)
 
   # apply quant/dequant stabs
-  float_model = torch.quantization.add_quant_dequant(float_model)
+  float_model = QuantizedResMLP(module=float_model)
 
   # quantization configurations
   float_model.qconfig = torch.quantization.get_default_qat_qconfig('qnnpack')
@@ -128,9 +129,15 @@ def main():
   torch.quantization.convert(quantized_model, inplace=True)
   quantized_model.eval()
 
-  wt_compare_dict = ns.compare_weights(float_model.state_dict(), quantized_model.state_dict())
-  print('keys of wt_compare_dict:')
-  print(wt_compare_dict.keys())
+  quantized_model = load_model(quantized_model, DICT_PATH, "cpu")
+  
+  dd = quantized_model.module.state_dict()
+  for a in dd:
+    q = dd[a][0]
+    print(f"{a}:")
+    #print(q[0])
+    print(q.dequantize())
+    break
 
 
 if __name__ == "__main__":
