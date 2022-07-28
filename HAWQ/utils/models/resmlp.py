@@ -3,7 +3,6 @@ import torch.nn as nn
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
-from torchsummary import summary
 
 __all__ = [
     'resmlp_12', 'resmlp_24'
@@ -97,6 +96,7 @@ class resmlp_models(nn.Module):
 
     def forward_features(self, x):
         B = x.shape[0]
+
         x = self.patch_embed(x)
 
         for i, blk in enumerate(self.blocks):
@@ -108,7 +108,7 @@ class resmlp_models(nn.Module):
         return x[:, 0]
 
     def forward(self, x):
-        x = self.forward_features(x)
+        x  = self.forward_features(x)
         x = self.head(x)
         return x 
 
@@ -120,6 +120,9 @@ def resmlp_12(pretrained=False, **kwargs):
         init_scale=0.1,**kwargs)
     
     model.default_cfg = _cfg()
+
+    if pretrained:
+        model.load_state_dict(torch.load("ResMLP_S24_ReLU_fp32_80.602.pth"))
     return model
   
 @register_model
@@ -133,7 +136,3 @@ def resmlp_24(pretrained=False, **kwargs):
     if pretrained:
         model.load_state_dict(torch.load("ResMLP_S24_ReLU_fp32_80.602.pth"))
     return model
-
-model = resmlp_12()
-# print(model)
-print(summary(model, (3, 224, 224), device="cpu"))
