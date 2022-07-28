@@ -134,3 +134,6 @@ dmypy.json
 *.pth
 *.tar
 /folder
+
+# wandb
+/wandb

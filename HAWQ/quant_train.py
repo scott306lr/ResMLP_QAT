@@ -1,3 +1,5 @@
+import wandb
+
 import argparse
 import os
 import random
@@ -157,6 +159,9 @@ parser.add_argument('--no-quant',
 parser.add_argument('--regular',
                     action='store_true',
                     help='if set to true, run with original model')
+parser.add_argument('--wandb',
+                    action='store_true',
+                    help='if set to true, log with wandb')
 best_acc1 = 0
 quantize_arch_dict = {'resmlp24': q_resmlp24,
                       'resnet50': q_resnet50, 'resnet50b': q_resnet50,
@@ -464,6 +469,19 @@ def main_worker(gpu, ngpus_per_node, args):
         validate(val_loader, model, criterion, args)
         return
 
+    # train code
+    # wandb initialization
+    if args.wandb:
+        # wandb.login(key=)
+        wandb.init(project="resmlp_qat")
+        wandb.config = {
+            "epochs": args.epochs,
+            "learning_rate": args.lr,
+            "batch_size": args.batch_size,
+            "dataset": "imagenet",
+            "data_percentage": args.data_percentage,
+        }
+
     best_epoch = 0
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -549,6 +567,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
+            if args.wandb:
+                wandb.log({
+                    "train_loss": loss.item(), 
+                    "train_acc1": acc1[0], 
+                    "train_acc5": acc5[0]
+                })
 
 
 def train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_loader, args, ngpus_per_node,
@@ -613,6 +637,12 @@ def train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_load
         if i % args.print_freq == 0 and args.rank == 0:
             print('Epoch {epoch_} [{iters}]  Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(epoch_=epoch, iters=i,
                                                                                                top1=top1, top5=top5))
+            if args.wandb:
+                wandb.log({
+                    "train_loss": loss.item(), 
+                    "train_acc1": acc1[0], 
+                    "train_acc5": acc5[0]
+                })
 
         if i % ((dataset_length // (
                 args.batch_size * args.evaluate_times)) + 2) == 0 and i > 0 and args.evaluate_times > 0:
@@ -683,6 +713,13 @@ def validate(val_loader, model, criterion, args):
 
         logging.info(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
 
+    if args.wandb:
+        wandb.log({
+            "test_loss": loss.item(), 
+            "test_acc1": acc1[0], 
+            "test_acc5": acc5[0]
+        })
+        
     torch.save({'convbn_scaling_factor': {k: v for k, v in model.state_dict().items() if 'convbn_scaling_factor' in k},
                 'fc_scaling_factor': {k: v for k, v in model.state_dict().items() if 'fc_scaling_factor' in k},
                 'weight_integer': {k: v for k, v in model.state_dict().items() if 'weight_integer' in k},

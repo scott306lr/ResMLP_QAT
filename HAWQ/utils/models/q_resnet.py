@@ -316,16 +316,16 @@ class Q_ResBlockBn(nn.Module):
         return x, act_scaling_factor
 
 
-def q_resnet18(model):
+def q_resnet18(model, full_precision_flag=False):
     net = Q_ResNet18(model)
     return net
 
 
-def q_resnet50(model):
+def q_resnet50(model, full_precision_flag=False):
     net = Q_ResNet50(model)
     return net
 
 
-def q_resnet101(model):
+def q_resnet101(model, full_precision_flag=False):
     net = Q_ResNet101(model)
     return net

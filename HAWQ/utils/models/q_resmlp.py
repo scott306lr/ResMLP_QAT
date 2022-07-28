@@ -71,9 +71,10 @@ class Q_Layer(nn.Module):
     """
        Quantized ResNet unit with residual path.
     """
-    def __init__(self, full_precision_flag=False):
+    def __init__(self, full_precision_flag=False, res_fp=False):
         super(Q_Layer, self).__init__()
         self.full_precision_flag=full_precision_flag
+        self.res_fp=res_fp
 
     def set_param(self, block):
         self.quant_act = QuantAct(full_precision_flag=self.full_precision_flag)
@@ -129,8 +130,10 @@ class Q_Layer(nn.Module):
         x, weight_scaling_factor = self.gamma_1(x, act_scaling_factor)
         
         x = x + identity
-        x, act_scaling_factor = self.quant_act_int32_1(x, act_scaling_factor, weight_scaling_factor, identity, identity_act_scaling_factor)
-        
+        if not self.res_fp:
+            x, act_scaling_factor = self.quant_act_int32_1(x, act_scaling_factor, weight_scaling_factor, identity, identity_act_scaling_factor)
+        else:
+            x, act_scaling_factor = self.quant_act_int32_1(x)
 
         # Cross-channel sublayer
         identity = x
@@ -147,17 +150,21 @@ class Q_Layer(nn.Module):
         x, weight_scaling_factor = self.gamma_2(x, act_scaling_factor)
         
         x = x + identity
-        x, act_scaling_factor = self.quant_act_int32_2(x, act_scaling_factor, weight_scaling_factor)
-        
+        if not self.res_fp:
+            x, act_scaling_factor = self.quant_act_int32_2(x, act_scaling_factor, weight_scaling_factor, identity, identity_act_scaling_factor)
+        else:
+            x, act_scaling_factor = self.quant_act_int32_2(x)
+
         return x, act_scaling_factor
 
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.
     """
-    def __init__(self, model, full_precision_flag=False):
+    def __init__(self, model, full_precision_flag=False, res_fp=False):
         super().__init__()
         self.full_precision_flag = full_precision_flag
+        self.res_fp = res_fp
         patch_embed = getattr(model, 'patch_embed')
         blocks = getattr(model, 'blocks')
         norm = getattr(model, 'norm')
@@ -176,7 +183,7 @@ class Q_ResMLP24(nn.Module):
 
         for block_num in range(0, 24):
             mlp_layer = getattr(blocks, "{}".format(block_num))
-            quant_mlp_layer = Q_Layer(full_precision_flag=self.full_precision_flag)
+            quant_mlp_layer = Q_Layer(full_precision_flag=self.full_precision_flag, res_fp=self.res_fp)
             quant_mlp_layer.set_param(mlp_layer)
             setattr(self, "layer{}".format(block_num), quant_mlp_layer)
 
@@ -212,8 +219,8 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp24(model, full_precision_flag=False):
-    net = Q_ResMLP24(model, full_precision_flag=full_precision_flag)
+def q_resmlp24(model, full_precision_flag=False, res_fp=True):
+    net = Q_ResMLP24(model, full_precision_flag=full_precision_flag, res_fp=res_fp)
     return net
 
 
