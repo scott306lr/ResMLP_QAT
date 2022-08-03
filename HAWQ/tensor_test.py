@@ -15,6 +15,7 @@ T1 = torch.tensor([[1, 2, 3],
 # # print(torch.stack((T1, T2), dim=2))
 
 # print(torch.max(torch.stack([T1, T2], dim=1), dim=1))
-print(T1)
 
-print(T1.view(T1.size(0), -1))
+print(torch.min(T1, dim=1, out=None))
+
+# print(T1.view(T1.size(0), -1))

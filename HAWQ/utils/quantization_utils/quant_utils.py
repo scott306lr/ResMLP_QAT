@@ -127,8 +127,7 @@ def linear_dequantize(input_q, scale, zero_point, inplace=False):
 
 def symmetric_linear_quantization_params(num_bits,
                                          saturation_min,
-                                         saturation_max,
-                                         per_channel=False):
+                                         saturation_max):
     """
     Compute the scaling factor and zeropoint with the given quantization range for symmetric quantization.
 
@@ -136,24 +135,13 @@ def symmetric_linear_quantization_params(num_bits,
     ----------
     saturation_min: lower bound for quantization range
     saturation_max: upper bound for quantization range
-    per_channel: if True, calculate the scaling factor per channel.
     """
 
     # these computation do not require any gradients, to enforce this, we use torch.no_grad()
     with torch.no_grad():
         n = 2 ** (num_bits - 1) - 1
-        if per_channel:
-            scale, _ = torch.max(torch.stack([saturation_min.abs(), saturation_max.abs()], dim=1), dim=1)
-            scale = torch.clamp(scale, min=1e-8) / n
-        else:
-            scale = max(saturation_min.abs(), saturation_max.abs())
-            scale = torch.clamp(scale, min=1e-8) / n
-            # print("")
-            # print("saturation range(x_min, xmax):")
-            # print(saturation_min.abs()[0], saturation_max.abs()[0])
-            # print("n: ",format(n, '08b'), n)
-            # print("final scale:", scale[0])
-            # print("")
+        scale = max(saturation_min.abs(), saturation_max.abs())
+        scale = torch.clamp(scale, min=1e-8) / n
     return scale
 
 
@@ -365,13 +353,10 @@ class fixedpoint_fn(Function):
     """
 
     @staticmethod
-    def forward(ctx, z, bitwidth, quant_mode, z_scaling_factor, case, pre_act_scaling_factor=None,
+    def forward(ctx, z, bitwidth, z_scaling_factor, case, pre_act_scaling_factor=None,
                 pre_weight_scaling_factor=None, identity=None, identity_scaling_factor=None,
                 identity_weight_scaling_factor=None):
-        if quant_mode == 'symmetric':
-            n = 2 ** (bitwidth - 1) - 1
-        else:
-            n = 2 ** bitwidth - 1
+        n = 2 ** (bitwidth - 1) - 1
 
         with torch.no_grad():
             # reshape all the tensors to have correct sizes.
@@ -412,10 +397,7 @@ class fixedpoint_fn(Function):
 
                 output = torch.round(output / (2.0 ** e))
 
-                if quant_mode == 'symmetric':
-                    return torch.clamp(output.type(torch.float), -n - 1, n)
-                else:
-                    return torch.clamp(output.type(torch.float), 0, n)
+                return torch.clamp(output.type(torch.float), -n - 1, n)
 
             # in case 1, the tensor z should be separeted into 2 parts, one from wy, another from wx
             elif case == 1:

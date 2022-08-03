@@ -219,7 +219,7 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp24(model, full_precision_flag=False, res_fp=True):
+def q_resmlp24(model, full_precision_flag=False, res_fp=False):
     net = Q_ResMLP24(model, full_precision_flag=full_precision_flag, res_fp=res_fp)
     return net
 

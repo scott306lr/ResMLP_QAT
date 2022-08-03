@@ -130,9 +130,6 @@ parser.add_argument('--weight-percentile',
                     default=0,
                     help='the percentage used for weight percentile'
                          '(0 means no percentile, 99.9 means cut off 0.1%)')
-parser.add_argument('--channel-wise',
-                    action='store_true',
-                    help='whether to use channel-wise quantizaiton or not')
 parser.add_argument('--bias-bit',
                     type=int,
                     default=32,
@@ -149,10 +146,9 @@ parser.add_argument('--temperature',
                     type=float,
                     default=6,
                     help='how large is the temperature factor for distillation')
-parser.add_argument('--fixed-point-quantization',
+parser.add_argument('--skip-connection-fp',
                     action='store_true',
-                    help='whether to skip deployment-oriented operations and '
-                         'use fixed-point rather than integer-only quantization')
+                    help='whether to ignore quantizating skip-connecitions')
 parser.add_argument('--no-quant',
                     action='store_true',
                     help='if set to true, run model with quantization all disabled')
@@ -235,7 +231,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                 world_size=args.world_size, rank=args.rank)
     # create model
     if args.pretrained and not args.resume:
-        logging.info("=> using pre-trained PyTorchCV model '{}'".format(args.arch))
+        logging.info("=> using pre-trained model '{}'".format(args.arch))
         if args.arch == 'resmlp24':
             model = resmlp_24(pretrained=True)
         else:
@@ -244,7 +240,7 @@ def main_worker(gpu, ngpus_per_node, args):
             logging.info("=> using pre-trained PyTorchCV teacher '{}'".format(args.teacher_arch))
             teacher = ptcv_get_model(args.teacher_arch, pretrained=True)
     else:
-        logging.info("=> creating PyTorchCV model '{}'".format(args.arch))
+        logging.info("=> creating model '{}'".format(args.arch))
         if args.arch == 'resmlp24':
             model = resmlp_24(pretrained=False)
         else:
@@ -277,7 +273,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     quantize_arch = quantize_arch_dict[args.arch]
     if not args.regular:
-        model = quantize_arch(model, full_precision_flag=args.no_quant)
+        model = quantize_arch(model, full_precision_flag=args.no_quant, res_fp=args.skip_connection_fp)
     bit_config = bit_config_dict["bit_config_" + args.arch + "_" + args.quant_scheme]
     name_counter = 0
 
@@ -285,10 +281,11 @@ def main_worker(gpu, ngpus_per_node, args):
     for name, m in model.named_modules():
         if name in bit_config.keys():
             name_counter += 1
-            setattr(m, 'quant_mode', 'symmetric')
+            # setattr(m, 'quant_mode', 'symmetric')
             # setattr(m, 'bias_bit', args.bias_bit)
             # setattr(m, 'quantize_bias', (args.bias_bit != 0))
-            setattr(m, 'per_channel', args.channel_wise)
+            # setattr(m, 'per_channel', args.channel_wise)
+            setattr(m, 'full_precision_flag', args.no_quant)
             setattr(m, 'act_percentile', args.act_percentile)
             setattr(m, 'act_range_momentum', args.act_range_momentum)
             setattr(m, 'weight_percentile', args.weight_percentile)
@@ -298,24 +295,10 @@ def main_worker(gpu, ngpus_per_node, args):
             setattr(m, 'training_BN_mode', args.fix_BN)
             setattr(m, 'checkpoint_iter_threshold', args.checkpoint_iter)
             setattr(m, 'save_path', args.save_path)
-            setattr(m, 'fixed_point_quantization', args.fixed_point_quantization)
-            # setattr(m, 'full_precision_flag', True)
             
-
-            # if type(bit_config[name]) is tuple:
-            #     bitwidth = bit_config[name][0]
-            #     if bit_config[name][1] == 'hook':
-            #         m.register_forward_hook(hook_fn_forward)
-            #         global hook_keys
-            #         hook_keys.append(name)
-            # else:
             bitwidth = bit_config[name]
-
             if hasattr(m, 'activation_bit'):
                 setattr(m, 'activation_bit', bitwidth)
-                # print(name, bitwidth)
-                if bitwidth == 4:
-                    setattr(m, 'quant_mode', 'asymmetric')
             else:
                 setattr(m, 'weight_bit', bitwidth)
 
@@ -326,7 +309,7 @@ def main_worker(gpu, ngpus_per_node, args):
         if os.path.isfile(args.resume):
             logging.info("=> loading quantized checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)['state_dict']
-            print(checkpoint)
+            # print(checkpoint)
             modified_dict = {}
             for key, value in checkpoint.items():
                 if 'num_batches_tracked' in key: continue
@@ -338,10 +321,10 @@ def main_worker(gpu, ngpus_per_node, args):
             model.load_state_dict(modified_dict, strict=False)
         else:
             logging.info("=> no quantized checkpoint found at '{}'".format(args.resume))
-        print(model)
-        print("qmodel state dict: ")
-        print(model.state_dict())
-        return
+        # print(model)
+        # print("qmodel state dict: ")
+        # print(model.state_dict())
+        # return
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -473,14 +456,19 @@ def main_worker(gpu, ngpus_per_node, args):
     # wandb initialization
     if args.wandb:
         # wandb.login(key=)
-        wandb.init(project="resmlp_qat")
-        wandb.config = {
-            "epochs": args.epochs,
-            "learning_rate": args.lr,
-            "batch_size": args.batch_size,
-            "dataset": "imagenet",
-            "data_percentage": args.data_percentage,
-        }
+        id = wandb.util.generate_id()
+        wandb.init(
+            project="resmlp_qat",
+            id=id,
+            # resume=("must" if args.resume is True else False),
+            config={
+                "epochs": args.epochs,
+                "learning_rate": args.lr,
+                "batch_size": args.batch_size,
+                "dataset": "imagenet",
+                "data_percentage": args.data_percentage,
+                "quantize skip-add": not args.skip_connection_fp,
+            })
 
     best_epoch = 0
     for epoch in range(args.start_epoch, args.epochs):
@@ -715,11 +703,11 @@ def validate(val_loader, model, criterion, args):
 
     if args.wandb:
         wandb.log({
-            "test_loss": loss.item(), 
-            "test_acc1": acc1[0], 
-            "test_acc5": acc5[0]
+            "test_avg_loss": losses.avg, 
+            "test_avg_acc1": top1.avg, 
+            "test_avg_acc5": top5.avg
         })
-        
+
     torch.save({'convbn_scaling_factor': {k: v for k, v in model.state_dict().items() if 'convbn_scaling_factor' in k},
                 'fc_scaling_factor': {k: v for k, v in model.state_dict().items() if 'fc_scaling_factor' in k},
                 'weight_integer': {k: v for k, v in model.state_dict().items() if 'weight_integer' in k},
