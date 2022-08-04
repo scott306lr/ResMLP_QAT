@@ -108,6 +108,7 @@ def find_layers_dist(linear_layers):
     # access small batch of validation data
     data_loc = "/mnt/disk1/imagenet"
     valdir = os.path.join(data_loc, 'val')
+    train_resolution = 224
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
     val_dataset = datasets.ImageFolder(
