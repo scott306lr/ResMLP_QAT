@@ -75,12 +75,13 @@ class QuantLinear(Module):
         self.weight_function = SymmetricQuantFunction.apply
 
         if not self.full_precision_flag:
+            # if not self.fix_flag:
             # calculate weight scale
             w_transform = self.linear.weight.data.detach()
             w_min = w_transform.min().expand(1)
             w_max = w_transform.max().expand(1)
             self.fc_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max)
-
+            
             # quantize weight to integer
             self.weight_integer = self.weight_function(self.linear.weight, self.weight_bit, self.fc_scaling_factor)
             
@@ -99,7 +100,6 @@ class QuantLinear(Module):
             correct_output_scale = bias_scaling_factor.view(1, -1)
             a_int32 = ste_round.apply(
                 F.linear(x_int, weight=self.weight_integer, bias=self.bias_integer))
-
             return a_int32 * correct_output_scale, self.fc_scaling_factor
         
         else:
@@ -144,8 +144,8 @@ class QuantAct(Module):
 
         self.register_buffer('x_min', torch.zeros(1))
         self.register_buffer('x_max', torch.zeros(1))
-        self.register_buffer('act_scaling_factor', torch.zeros(1))
-
+        # self.register_buffer('act_scaling_factor', torch.zeros(1))
+        self.act_scaling_factor= nn.Parameter(torch.zeros(1), requires_grad=False)
         self.register_buffer('pre_weight_scaling_factor', torch.ones(1))
         self.register_buffer('identity_weight_scaling_factor', torch.ones(1))
 
@@ -205,11 +205,15 @@ class QuantAct(Module):
                 else:
                     self.x_min = self.x_min * self.act_range_momentum + x_min * (1 - self.act_range_momentum)
                     self.x_max = self.x_max * self.act_range_momentum + x_max * (1 - self.act_range_momentum)
-
+            
+            print(self.fix_flag, self.x_min, self.x_max, self.act_scaling_factor)
             # perform the quantization
-            self.act_scaling_factor = symmetric_linear_quantization_params(self.activation_bit,
+            act_scaling_factor = symmetric_linear_quantization_params(self.activation_bit,
                                                                                self.x_min, self.x_max)
-            # print(self.act_scaling_factor)
+            self.act_scaling_factor = nn.Parameter(act_scaling_factor, requires_grad=False)
+            # self.act_scaling_factor = symmetric_linear_quantization_params(self.activation_bit,
+            #                                                                    self.x_min, self.x_max)
+            # print(self.fix_flag, self.x_min, self.x_max, self.act_scaling_factor)                                                                
             
             if pre_act_scaling_factor is None:
                 # this is for the case of input quantization,
@@ -324,6 +328,7 @@ class QuantConv2d(Module):
 
         w = self.conv.weight.detach()
         if not self.full_precision_flag:
+            # if not self.fix_flag:
             # calculate quantization range
             if self.weight_percentile == 0:
                 w_min = w.data.min().expand(1)
@@ -331,10 +336,12 @@ class QuantConv2d(Module):
             else:
                 w_min, w_max = get_percentile_min_max(w.view(-1), 100 - self.weight_percentile,
                                                     self.weight_percentile, output_tensor=True)
-            
+        
             # perform quantization
             self.conv_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max)
             self.weight_integer = self.weight_function(self.conv.weight, self.weight_bit, self.conv_scaling_factor)
+            
+            
             bias_scaling_factor = self.conv_scaling_factor.view(1, -1) * pre_act_scaling_factor.view(1, -1)
             if self.quantize_bias and (self.conv.bias is not None):
                 self.bias_integer = self.weight_function(self.conv.bias, self.bias_bit, bias_scaling_factor)
@@ -449,7 +456,7 @@ class QuantBnConv2d(Module):
         self.weight_function = SymmetricQuantFunction.apply
 
         # determine whether to fold BN or not
-        if self.fix_flag == False:
+        if not self.fix_flag:
             self.counter += 1
             if (self.fix_BN_threshold == None) or (self.counter < self.fix_BN_threshold):
                 self.fix_BN = self.training_BN_mode

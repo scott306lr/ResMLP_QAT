@@ -107,8 +107,6 @@ class Q_Layer(nn.Module):
         self.gamma_2 = QuantLinear(full_precision_flag=self.full_precision_flag)
         self.gamma_2.set_param(gamma_2)
         self.quant_act_int32_2 = QuantAct(full_precision_flag=self.full_precision_flag)
-        
-        # self.quant_act_int32 = QuantAct()
 
     def forward(self, x, act_scaling_factor=None):
         # Cross-patch sublayer
