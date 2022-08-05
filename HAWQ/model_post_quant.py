@@ -9,8 +9,8 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import os, time
 
-model = resmlp_24(pretrained=True)
-qmodel = q_resmlp24(model, full_precision_flag=True)
+model = resmlp_24(pretrained=True).cuda()
+# qmodel = q_resmlp24(model, full_precision_flag=True)
 
 def get_linear_layers(model):
     linear_layers = []
@@ -148,5 +148,4 @@ def resmlp_bias_absorb(model):
     layers_dist = find_layers_dist(linear_layers)
     high_bias_absorption(linear_layers, layers_dist)
 
-resmlp_bias_absorb(qmodel)
-# getattr(qmodel, f'layer0')
+resmlp_bias_absorb(model)
