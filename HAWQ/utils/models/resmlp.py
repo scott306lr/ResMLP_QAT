@@ -26,16 +26,14 @@ class layers_scale_mlp_blocks(nn.Module):
         super().__init__()
         self.norm1 = Affine(dim)
         self.attn = nn.Linear(num_patches, num_patches)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = Affine(dim)
-        
-        self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
-        #self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-        #self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
         self.gamma_1 = nn.Linear(dim, dim, bias=False)
-        self.gamma_2 = nn.Linear(dim, dim, bias=False)
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.skip_add = nn.quantized.FloatFunctional()
 
+        self.norm2 = Affine(dim)
+        self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
+        self.gamma_2 = nn.Linear(dim, dim, bias=False)
+        
     def forward(self, x):
         residual = x
         #x = self.skip_add.add(residual, self.drop_path(self.gamma_1 * self.attn(self.norm1(x).transpose(1,2)).transpose(1,2)))

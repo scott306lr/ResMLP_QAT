@@ -9,15 +9,17 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import os, time
 
-model = resmlp_24(pretrained=True).cuda()
-# qmodel = q_resmlp24(model, full_precision_flag=True)
-
-def get_linear_layers(model):
+def get_linear_layers(model, prefix=""):
     linear_layers = []
     for name, module in model.named_modules():
-        if isinstance(module, QuantLinear):
-            linear_layers.append((name, module))
+        if isinstance(module, nn.Linear):
+            linear_layers.append((f'{prefix}{name}', module))
     return linear_layers
+
+class StdMean(object):
+    def __init__(self, std=0, mean=0):
+        self.std = std
+        self.mean = mean
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -90,22 +92,24 @@ def calibrate(val_loader, model):
 
 def find_layers_dist(linear_layers):
     layers_dist = {}
-    momentum = 0.1
+    momentum = 0.99
     def get_std_mean(name):
         def hook(model, input, output):
-            new_std_mean = output.detach().torch.std_mean(x, dim=[0, 1], unbiased=False)
+            new_std_mean = torch.std_mean(output.detach(), dim=[0, 1], unbiased=False)
             if name in layers_dist:
-                layers_dist[name][0] = (layers_dist[name][0]*momentum) + (new_std_mean[0]*(1 - momentum))
-                layers_dist[name][1] = (layers_dist[name][1]*momentum) + (new_std_mean[1]*(1 - momentum))
+                layers_dist[name].std = (layers_dist[name].std*momentum) + (new_std_mean[0]*(1 - momentum))
+                layers_dist[name].mean = (layers_dist[name].mean*momentum) + (new_std_mean[1]*(1 - momentum))
             else:
-                layers_dist[name] = new_std_mean
+                layers_dist[name] = StdMean(new_std_mean[0], new_std_mean[1])
+
         return hook
 
     # register hook
-    for i, (n, m) in enumerate(linear_layers):
-        m.register_forward_hook(get_std_mean(f'l{i}-{n}'))
+    for n, m in linear_layers:
+        m.register_forward_hook(get_std_mean(n))
 
     # access small batch of validation data
+    print("Loading a small piece of validation data...")
     data_loc = "/mnt/disk1/imagenet"
     valdir = os.path.join(data_loc, 'val')
     train_resolution = 224
@@ -120,12 +124,12 @@ def find_layers_dist(linear_layers):
             normalize,
         ]))
     
-    data_percentage = 0.0001
+    data_percentage = 0.01
     dataset_length = int(len(val_dataset) * data_percentage)
-    partial_train_dataset, _ = torch.utils.data.random_split(val_dataset,
+    partial_val_dataset, _ = torch.utils.data.random_split(val_dataset,
                                                                 [dataset_length, len(val_dataset) - dataset_length])
     val_loader = torch.utils.data.DataLoader(
-        partial_train_dataset, batch_size=32, shuffle=True,
+        partial_val_dataset, batch_size=32, shuffle=True,
         num_workers=4, pin_memory=True, sampler=None)
 
     calibrate(val_loader, model)
@@ -136,16 +140,107 @@ def find_layers_dist(linear_layers):
 def high_bias_absorption(linear_layers, layers_dist):
     for idx in range(1, len(linear_layers)):
         (prev_name, prev), (curr_name, curr) = linear_layers[idx-1], linear_layers[idx]
-        gamma, beta = layers_dist[idx-1]
-        # torch.std_mean(a, dim=1, unbiased=False)[0]
+        
+        gamma, beta = layers_dist[prev_name].std, layers_dist[prev_name].mean
+        
+        c = (beta - 3 * torch.abs(gamma)).clamp_(min = 0)
+        # print(prev_name, prev.weight.shape, prev.bias.shape)
+        # print(curr_name, curr.weight.shape, curr.bias.shape)
+        print("c", c.max())
+        # print()
+        prev.bias.data.add_(-c)
+        w_mul = curr.weight.data.matmul(c)
+        curr.bias.data.add_(w_mul)
+
+def cross_layer_equalization(linear_layers):
+    '''
+    Perform Cross Layer Scaling :
+    Iterate modules until scale value is converged up to 1e-8 magnitude
+    '''
+    S_history = dict()
+    eps = 1e-8
+    converged = [False] * (len(linear_layers)-1)
+    with torch.no_grad(): 
+        while not np.all(converged):
+            for idx in range(1, len(linear_layers)):
+                (prev_name, prev), (curr_name, curr) = linear_layers[idx-1], linear_layers[idx]
+                
+                range_1 = 2.*torch.abs(prev.weight).max(axis = 1)[0] # abs max of each row * 2
+                range_2 = 2.*torch.abs(curr.weight).max(axis = 0)[0] # abs max of each col * 2
+                S = torch.sqrt(range_1 * range_2) / range_2
+
+                if idx in S_history:
+                    prev_s = S_history[idx]
+                    if torch.allclose(S, prev_s, atol=eps):
+                        converged[idx-1] = True
+                        continue
+                    else:
+                        converged[idx-1] = False
+
+                # div S for each row
+                prev.weight.data.div_(S.view(-1, 1))
+                if prev.bias is not None:
+                    prev.bias.data.div_(S)
+                
+                # mul S for each col
+                curr.weight.data.mul_(S)
+                    
+                S_history[idx] = S
+    return linear_layers
+
+def cle_for_resmlp(model):
+    for i in range(0, 24):
+        todo_layer = model.blocks[i]
+        linear_layers = get_linear_layers(todo_layer)[3:] # cross-channel sublayer only
+        cross_layer_equalization(linear_layers)
 
 def resmlp_bias_absorb(model):
     linear_layers = []
     for i in range(0, 24):
-        todo_layer = getattr(model, f'layer{i}')
-        linear_layers += get_linear_layers(todo_layer)[3:] # cross-channel sublayer only
-    print(len(linear_layers))
+        todo_layer = model.blocks[i]
+        linear_layers += get_linear_layers(todo_layer, f'{i}-')[3:6] # cross-channel sublayer only
+    print("Linear layers to track:", len(linear_layers))
     layers_dist = find_layers_dist(linear_layers)
-    high_bias_absorption(linear_layers, layers_dist)
 
+    for i in range(0, 24):
+        todo_layer = model.blocks[i]
+        todo_layers = get_linear_layers(todo_layer, f'{i}-')[3:6] # cross-channel sublayer only
+        high_bias_absorption(todo_layers, layers_dist)
+
+def bias_dist_layer(model, start, end, name):
+  plt.title('Bias Distribution of Each Layer')
+  plt.rcParams["figure.figsize"] = [20, 5]
+  plt.rcParams["figure.autolayout"] = True
+
+  data = []
+  labels = []
+  for i in range(start, end+1):
+    todo_layer = model.blocks[i]
+    tlist = get_linear_layers(todo_layer)
+
+    for j, (n, m) in enumerate(tlist):
+      if m.bias is not None:
+        val = m.bias.detach().numpy().flatten()
+        data.append(val)
+        labels.append(f'{i}')
+    
+  # Creating plot
+  bp = plt.boxplot(data, labels=labels)
+  plt.savefig(f'{name}.png')
+
+model = resmlp_24(pretrained=True)
+
+model.cpu()
+bias_dist_layer(model, 0, 23, "before")
+
+model.cuda()
+cle_for_resmlp(model)
+
+model.cpu()
+bias_dist_layer(model, 0, 23, "mid")
+
+model.cuda()
 resmlp_bias_absorb(model)
+
+model.cpu()
+bias_dist_layer(model, 0, 23, "after")
