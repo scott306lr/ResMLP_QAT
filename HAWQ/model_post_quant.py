@@ -144,9 +144,10 @@ def high_bias_absorption(linear_layers, layers_dist):
         gamma, beta = layers_dist[prev_name].std, layers_dist[prev_name].mean
         
         c = (beta - 3 * torch.abs(gamma)).clamp_(min = 0)
-        # print(prev_name, prev.weight.shape, prev.bias.shape)
-        # print(curr_name, curr.weight.shape, curr.bias.shape)
-        print("c", c.max())
+        print(prev_name, prev.weight.shape, prev.bias.shape)
+        print(curr_name, curr.weight.shape, curr.bias.shape)
+        print()
+        # print("c", c.max())
         # print()
         prev.bias.data.add_(-c)
         w_mul = curr.weight.data.matmul(c)
