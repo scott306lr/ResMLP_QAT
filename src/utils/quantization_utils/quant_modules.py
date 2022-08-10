@@ -144,8 +144,8 @@ class QuantAct(Module):
 
         self.register_buffer('x_min', torch.zeros(1))
         self.register_buffer('x_max', torch.zeros(1))
-        # self.register_buffer('act_scaling_factor', torch.zeros(1))
-        self.act_scaling_factor= nn.Parameter(torch.zeros(1), requires_grad=False)
+        self.register_buffer('act_scaling_factor', torch.zeros(1))
+        # self.act_scaling_factor= nn.Parameter(torch.zeros(1), requires_grad=False)
         self.register_buffer('pre_weight_scaling_factor', torch.ones(1))
         self.register_buffer('identity_weight_scaling_factor', torch.ones(1))
 
@@ -206,13 +206,13 @@ class QuantAct(Module):
                     self.x_min = self.x_min * self.act_range_momentum + x_min * (1 - self.act_range_momentum)
                     self.x_max = self.x_max * self.act_range_momentum + x_max * (1 - self.act_range_momentum)
             
-            print(self.fix_flag, self.x_min, self.x_max, self.act_scaling_factor)
+            # print(self.fix_flag, self.x_min, self.x_max, self.act_scaling_factor)
             # perform the quantization
-            act_scaling_factor = symmetric_linear_quantization_params(self.activation_bit,
-                                                                               self.x_min, self.x_max)
-            self.act_scaling_factor = nn.Parameter(act_scaling_factor, requires_grad=False)
-            # self.act_scaling_factor = symmetric_linear_quantization_params(self.activation_bit,
+            # act_scaling_factor = symmetric_linear_quantization_params(self.activation_bit,
             #                                                                    self.x_min, self.x_max)
+            # self.act_scaling_factor = nn.Parameter(act_scaling_factor, requires_grad=False)
+            self.act_scaling_factor = symmetric_linear_quantization_params(self.activation_bit,
+                                                                               self.x_min, self.x_max)
             # print(self.fix_flag, self.x_min, self.x_max, self.act_scaling_factor)                                                                
             
             if pre_act_scaling_factor is None:

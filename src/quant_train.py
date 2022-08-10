@@ -20,6 +20,8 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+
+from post_quant.cle import cle_for_resmlp
 #from utils.models.resmlp import resmlp_12, resmlp_24
 
 from bit_config import *
@@ -155,6 +157,9 @@ parser.add_argument('--no-quant',
 parser.add_argument('--regular',
                     action='store_true',
                     help='if set to true, run with original model')
+parser.add_argument('--cle',
+                    action='store_true',
+                    help='if set to true, run cle before QAT')      
 parser.add_argument('--wandb',
                     action='store_true',
                     help='if set to true, log with wandb')
@@ -234,8 +239,12 @@ def main_worker(gpu, ngpus_per_node, args):
         logging.info("=> using pre-trained model '{}'".format(args.arch))
         if args.arch == 'resmlp24':
             model = resmlp_24(pretrained=True)
+            if args.cle:
+                cle_for_resmlp(model)
         else:
             model = ptcv_get_model(args.arch, pretrained=True)
+            if args.cle:
+                cle_for_resmlp(model)
         if args.distill_method != 'None':
             logging.info("=> using pre-trained PyTorchCV teacher '{}'".format(args.teacher_arch))
             teacher = ptcv_get_model(args.teacher_arch, pretrained=True)
@@ -243,8 +252,12 @@ def main_worker(gpu, ngpus_per_node, args):
         logging.info("=> creating model '{}'".format(args.arch))
         if args.arch == 'resmlp24':
             model = resmlp_24(pretrained=False)
+            if args.cle:
+                cle_for_resmlp(model)
         else:
             model = ptcv_get_model(args.arch, pretrained=False)
+            if args.cle:
+                cle_for_resmlp(model)
         if args.distill_method != 'None':
             logging.info("=> creating PyTorchCV teacher '{}'".format(args.teacher_arch))
             teacher = ptcv_get_model(args.teacher_arch, pretrained=False)
