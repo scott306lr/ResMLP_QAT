@@ -33,7 +33,7 @@ class layers_scale_mlp_blocks(nn.Module):
         self.norm2 = Affine(dim)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
         self.gamma_2 = nn.Linear(dim, dim, bias=False)
-        
+
     def forward(self, x):
         residual = x
         #x = self.skip_add.add(residual, self.drop_path(self.gamma_1 * self.attn(self.norm1(x).transpose(1,2)).transpose(1,2)))
@@ -110,6 +110,8 @@ class resmlp_models(nn.Module):
         x = self.head(x)
         return x 
 
+from model_post_quant import cle_for_resmlp
+
 @register_model
 def resmlp_12(pretrained=False, **kwargs):
     model = resmlp_models(
@@ -124,7 +126,7 @@ def resmlp_12(pretrained=False, **kwargs):
     return model
   
 @register_model
-def resmlp_24(pretrained=False, **kwargs):
+def resmlp_24(pretrained=False, cle=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
@@ -133,4 +135,8 @@ def resmlp_24(pretrained=False, **kwargs):
 
     if pretrained:
         model.load_state_dict(torch.load("ResMLP_S24_ReLU_fp32_80.602.pth"))
+    
+    if cle:
+        print("Applying CLE....")
+        cle_for_resmlp(model)
     return model
