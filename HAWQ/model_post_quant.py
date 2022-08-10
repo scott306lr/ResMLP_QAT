@@ -90,7 +90,7 @@ def calibrate(val_loader, model):
 
     print('Calibration done.')
 
-def find_layers_dist(linear_layers):
+def find_layers_dist(model, linear_layers):
     layers_dist = {}
     momentum = 0.99
     def get_std_mean(name):
