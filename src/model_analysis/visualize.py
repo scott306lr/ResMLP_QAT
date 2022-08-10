@@ -47,6 +47,27 @@ def flat_act_func(org_val, output):
 def act_dist(model, start, end, show_layers=None, name="Activation Distribution from Gamma_1/Gamma_2 for Each Layer", ax=None):
     model_layers = []
     for i in range(start, end+1):
+        todo_layer = model.blocks[i] # todo_layer = getattr(model, f"layer{i}")
+        model_layers.append(get_linear_layers(todo_layer, specify_names=show_layers, prefix=f"{i}-"))
+
+    activations = {}
+    hook_handler = HookHandler()
+    hook_handler.create_apply_hook(flat_act_func, activations, model_layers)
+    model(simulate_input())
+    hook_handler.remove_hook()
+    
+    data = []
+    labels = []
+    for layer in model_layers:
+        for n, m in layer:
+            data.append(activations[n])
+            labels.append(n)
+  
+    my_boxplot(data, labels, name, ax, total=len(labels), sep_interval=(len(labels) // (end-start+1)))
+
+def act_dist(model, start, end, show_layers=None, name="Activation Distribution from Gamma_1/Gamma_2 for Each Layer", ax=None):
+    model_layers = []
+    for i in range(start, end+1):
         todo_layer = model.blocks[i]
         model_layers.append(get_linear_layers(todo_layer, specify_names=show_layers, prefix=f"{i}-"))
 
