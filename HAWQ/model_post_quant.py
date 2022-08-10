@@ -144,10 +144,9 @@ def high_bias_absorption(linear_layers, layers_dist):
         gamma, beta = layers_dist[prev_name].std, layers_dist[prev_name].mean
         
         c = (beta - 3 * torch.abs(gamma)).clamp_(min = 0)
-        print(prev_name, prev.weight.shape, prev.bias.shape)
-        print(curr_name, curr.weight.shape, curr.bias.shape)
-        print()
-        # print("c", c.max())
+        # print(prev_name, prev.weight.shape, prev.bias.shape)
+        # print(curr_name, curr.weight.shape, curr.bias.shape)
+        print("c", c.max())
         # print()
         prev.bias.data.add_(-c)
         w_mul = curr.weight.data.matmul(c)
@@ -208,40 +207,62 @@ def resmlp_bias_absorb(model):
         todo_layers = get_linear_layers(todo_layer, f'{i}-')[3:6] # cross-channel sublayer only
         high_bias_absorption(todo_layers, layers_dist)
 
-def bias_dist_layer(model, start, end, name):
-  plt.title('Bias Distribution of Each Layer')
-  plt.rcParams["figure.figsize"] = [20, 5]
-  plt.rcParams["figure.autolayout"] = True
+def cross_layer_equalization(linear_layers):
+    '''
+    Perform Cross Layer Scaling :
+    Iterate modules until scale value is converged up to 1e-8 magnitude
+    '''
+    S_history = dict()
+    eps = 1e-8
+    converged = [False] * (len(linear_layers)-1)
+    with torch.no_grad(): 
+        while not np.all(converged):
+            for idx in range(1, len(linear_layers)):
+                (prev_name, prev), (curr_name, curr) = linear_layers[idx-1], linear_layers[idx]
+                
+                range_1 = 2.*torch.abs(prev.weight).max(axis = 1)[0] # abs max of each row * 2
+                range_2 = 2.*torch.abs(curr.weight).max(axis = 0)[0] # abs max of each col * 2
+                S = torch.sqrt(range_1 * range_2) / range_2
 
-  data = []
-  labels = []
-  for i in range(start, end+1):
-    todo_layer = model.blocks[i]
-    tlist = get_linear_layers(todo_layer)
+                if idx in S_history:
+                    prev_s = S_history[idx]
+                    if torch.allclose(S, prev_s, atol=eps):
+                        converged[idx-1] = True
+                        continue
+                    else:
+                        converged[idx-1] = False
 
-    for j, (n, m) in enumerate(tlist):
-      if m.bias is not None:
-        val = m.bias.detach().numpy().flatten()
-        data.append(val)
-        labels.append(f'{i}')
-    
-  # Creating plot
-  bp = plt.boxplot(data, labels=labels)
-  plt.savefig(f'{name}.png')
+                # div S for each row
+                prev.weight.data.div_(S.view(-1, 1))
+                if prev.bias is not None:
+                    prev.bias.div_(S)
+                
+                # mul S for each col
+                curr.weight.mul_(S)
+                    
+                S_history[idx] = S
+    return linear_layers
 
-model = resmlp_24(pretrained=True)
+def cle_for_resmlp(model):
+    for i in range(0, 24):
+        todo_layer = model.blocks[i]
+        linear_layers = get_linear_layers(todo_layer) # cross-channel sublayer only
+        # cross_patch_cle(linear_layers[:3])
+        cross_layer_equalization(linear_layers[3:])
 
-model.cpu()
-bias_dist_layer(model, 0, 23, "before")
+# model = resmlp_24(pretrained=True)
 
-model.cuda()
-cle_for_resmlp(model)
+# model.cpu()
+# bias_dist_layer(model, 0, 23, "before")
 
-model.cpu()
-bias_dist_layer(model, 0, 23, "mid")
+# model.cuda()
+# cle_for_resmlp(model)
 
-model.cuda()
-resmlp_bias_absorb(model)
+# model.cpu()
+# bias_dist_layer(model, 0, 23, "mid")
 
-model.cpu()
-bias_dist_layer(model, 0, 23, "after")
+# model.cuda()
+# resmlp_bias_absorb(model)
+
+# model.cpu()
+# bias_dist_layer(model, 0, 23, "after")

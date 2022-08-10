@@ -155,6 +155,9 @@ parser.add_argument('--no-quant',
 parser.add_argument('--regular',
                     action='store_true',
                     help='if set to true, run with original model')
+parser.add_argument('--cle',
+                    action='store_true',
+                    help='if set to true, run cle before QAT')                   
 parser.add_argument('--wandb',
                     action='store_true',
                     help='if set to true, log with wandb')
@@ -233,7 +236,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.pretrained and not args.resume:
         logging.info("=> using pre-trained model '{}'".format(args.arch))
         if args.arch == 'resmlp24':
-            model = resmlp_24(pretrained=True)
+            model = resmlp_24(pretrained=True, cle=args.cle)
         else:
             model = ptcv_get_model(args.arch, pretrained=True)
         if args.distill_method != 'None':
@@ -242,7 +245,7 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         logging.info("=> creating model '{}'".format(args.arch))
         if args.arch == 'resmlp24':
-            model = resmlp_24(pretrained=False)
+            model = resmlp_24(pretrained=False, cle=args.cle)
         else:
             model = ptcv_get_model(args.arch, pretrained=False)
         if args.distill_method != 'None':
@@ -468,6 +471,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 "dataset": "imagenet",
                 "data_percentage": args.data_percentage,
                 "quantize skip-add": not args.skip_connection_fp,
+                "cle": args.cle,
             })
 
     best_epoch = 0
