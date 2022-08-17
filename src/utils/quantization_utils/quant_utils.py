@@ -31,12 +31,6 @@ def symmetric_linear_quantization_params(num_bits, abs_max):
         scale = torch.clamp(abs_max, min=1e-8) / n
     return scale
 
-def symmetric_quantization(weight, scale, num_bits):
-    q_levels_per_sign = 2**(num_bits-1)
-    min_level = -q_levels_per_sign
-    max_level = q_levels_per_sign - 1
-    return torch.clamp(RoundSTE.apply(weight / scale), min_level, max_level)
- 
 class RoundSTE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: torch.Tensor):
@@ -55,28 +49,11 @@ class FloorSTE(torch.autograd.Function):
     def backward(ctx, grad_y):
         return grad_y
 
-class LinearQuantizeSTE(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, scale):
-        ctx.save_for_backward(scale)
-        output = torch.round(input / scale)
-        return output
+def linear_quantization(weight, scale, num_bits):
+    q_levels_per_sign = 2**(num_bits-1)
+    min_level = -q_levels_per_sign
+    max_level = q_levels_per_sign - 1
+    return torch.clamp(RoundSTE.apply(weight / scale), min_level, max_level)
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        # Straight-through estimator
-        scale, = ctx.saved_tensors
-        return grad_output / scale, None
-
-class LinearDequantizeSTE(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, scale):
-        ctx.save_for_backward(scale)
-        output = input * scale
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # Straight-through estimator
-        scale, = ctx.saved_tensors
-        return grad_output * scale, None
+def linear_dequantization(weight, scale, num_bits=None):
+    return weight * scale

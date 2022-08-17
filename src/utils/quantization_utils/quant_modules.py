@@ -50,8 +50,6 @@ class QAct(Module):
             input = F.relu(input)
         
         if self.training:
-            if a_s == None: raise ValueError('Should not be None during QAT!')
-
             with torch.no_grad():
                 current_min, current_max = input.min(), input.max() 
                 self.iter_count += 1
@@ -61,10 +59,14 @@ class QAct(Module):
                 max_abs = max(abs(self.tracked_min), abs(self.tracked_max))
                 org_scale = symmetric_linear_quantization_params(self.num_bit, max_abs)
                 self.mult.data, self.shift.data = get_scale_approximation_params(a_s / org_scale, self.num_bit)
-        
-            x_int32 = LinearQuantizeSTE.apply(input, a_s)
-            x_int8 = FloorSTE.apply((x_int32 * self.mult) / (2 ** self.shift))
-            x_fp  = LinearDequantizeSTE.apply(x_int8, org_scale)
+
+            if a_s == None:
+                return x_fp, org_scale
+                
+            else :
+                x_int32 = linear_quantization(input, a_s, self.num_bit)
+                x_int8 = FloorSTE.apply((x_int32 * self.mult) / (2 ** self.shift))
+                x_fp  = linear_dequantization(x_int8, org_scale)
 
             return x_fp, org_scale
         
@@ -74,14 +76,12 @@ class QAct(Module):
 
 class QLinear(Module):
     def __init__(self,
-                 weight_bit=8,
-                 bias_bit=None,
+                 num_bit=8,
                  full_precision_flag=False,
                  training = True
                  ):
         super(QLinear, self).__init__()
-        self.weight_bit = weight_bit
-        self.bias_bit = bias_bit
+        self.num_bit = num_bit
         self.full_precision_flag = full_precision_flag
         self.training = training
 
@@ -112,18 +112,18 @@ class QLinear(Module):
                 w_transform = self.linear.weight
                 w_min = w_transform.min()
                 w_max = w_transform.max()
-                self.w_s = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max)
+                self.w_s = symmetric_linear_quantization_params(self.num_bit, w_min, w_max)
                 b_s = self.w_s * a_s
             
-            x_int8 = LinearQuantizeSTE.apply(input, a_s)
-            self.w_int = LinearQuantizeSTE.apply(self.linear.weight, self.w_s)
+            x_int8 = linear_quantization(input, a_s, self.num_bit)
+            self.w_int = linear_quantization(self.linear.weight, self.w_s, self.num_bit)
             if self.linear.bias is not None:
-                self.b_int = LinearQuantizeSTE.apply(self.linear.bias, b_s)
+                self.b_int = linear_quantization(self.linear.bias, b_s, self.num_bit)
             else:
                 self.b_int = None
 
             out_int32 = RoundSTE.apply(F.linear(x_int8, weight=self.w_int, bias=self.b_int))
-            out_fp = LinearDequantizeSTE.apply(out_int32, b_s)
+            out_fp = linear_dequantization(out_int32, b_s)
             return out_fp, b_s
 
         else: #input: int8 instead
@@ -177,14 +177,14 @@ class QResAct(Module):
                 org_scale = symmetric_linear_quantization_params(self.num_bit, max_abs)
                 self.mult, self.shift = get_scale_approximation_params(res_a_s / org_scale, self.num_bit)
         
-            x_int32 = LinearQuantizeSTE.apply(input, wb_s)
-            res_x_int8 = LinearQuantizeSTE.apply(res_fp, res_a_s)
+            x_int32 = linear_quantization(input, wb_s, self.num_bit)
+            res_x_int8 = linear_quantization(res_fp, res_a_s, self.num_bit)
             res_x_int32 = FloorSTE.apply((res_x_int8 * self.res_mult) / (2 ** self.res_shift))
 
             mix_int32 = x_int32 + res_x_int32
             out_int8 = FloorSTE.apply((mix_int32 * self.mult) / (2 ** self.shift))
 
-            out_fp  = LinearDequantizeSTE.apply(out_int8, org_scale)
+            out_fp  = linear_dequantization(out_int8, org_scale)
             return out_fp, org_scale
 
         else: #input: int8 instead
