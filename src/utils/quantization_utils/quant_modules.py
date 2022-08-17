@@ -71,6 +71,8 @@ class QAct(Module):
             return x_fp, org_scale
         
         else: #input: int8 instead
+            if a_s != None: raise ValueError('Should not have value during Validation!')
+
             with torch.no_grad():
                 return FloorSTE.apply((input * self.mult) / (2 ** self.shift)), None
 
@@ -127,6 +129,8 @@ class QLinear(Module):
             return out_fp, b_s
 
         else: #input: int8 instead
+            if a_s != None: raise ValueError('Should not have value during Validation!')
+            
             with torch.no_grad():
                 return F.linear(input, weight=self.w_int, bias=self.b_int), None
 
@@ -188,6 +192,8 @@ class QResAct(Module):
             return out_fp, org_scale
 
         else: #input: int8 instead
+            if wb_s != None or res_fp != None or res_a_s != None : raise ValueError('Should not have value during Validation!')
+
             res_x_int32 = FloorSTE.apply((res_x_int8 * self.res_mult) / (2 ** self.res_shift))
             mix_int32 = input + res_x_int32
 
