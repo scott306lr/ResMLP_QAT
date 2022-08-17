@@ -57,7 +57,7 @@ class QAct(Module):
                 self.tracked_max_biased.data, self.tracked_max.data = update_ema(self.tracked_max_biased.data, current_max, self.ema_decay, self.iter_count)
         
                 max_abs = max(abs(self.tracked_min), abs(self.tracked_max))
-                org_scale = symmetric_linear_quantization_params(self.num_bit, max_abs)
+                org_scale = get_quantization_scale(self.num_bit, max_abs)
                 self.mult.data, self.shift.data = get_scale_approximation_params(a_s / org_scale, self.num_bit)
 
             if a_s == None:
@@ -112,7 +112,7 @@ class QLinear(Module):
                 w_transform = self.linear.weight
                 w_min = w_transform.min()
                 w_max = w_transform.max()
-                self.w_s = symmetric_linear_quantization_params(self.num_bit, w_min, w_max)
+                self.w_s = get_quantization_scale(self.num_bit, w_min, w_max)
                 b_s = self.w_s * a_s
             
             x_int8 = linear_quantization(input, a_s, self.num_bit)
@@ -174,7 +174,7 @@ class QResAct(Module):
                 self.tracked_max_biased.data, self.tracked_max.data = update_ema(self.tracked_max_biased.data, current_max, self.ema_decay, self.iter_count)
     
                 max_abs = max(abs(self.tracked_min), abs(self.tracked_max))
-                org_scale = symmetric_linear_quantization_params(self.num_bit, max_abs)
+                org_scale = get_quantization_scale(self.num_bit, max_abs)
                 self.mult, self.shift = get_scale_approximation_params(res_a_s / org_scale, self.num_bit)
         
             x_int32 = linear_quantization(input, wb_s, self.num_bit)
