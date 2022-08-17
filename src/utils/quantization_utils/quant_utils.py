@@ -24,7 +24,7 @@ def approx_scale_as_mult_and_shift(fp32_scale, mult_bits, limit=False):
     return multiplier / (2 ** shift_bits)
 
 
-def symmetric_linear_quantization_params(num_bits, abs_max):
+def get_quantization_scale(num_bits, abs_max):
     # these computation do not require any gradients, to enforce this, we use torch.no_grad()
     with torch.no_grad():
         n = 2 ** (num_bits - 1) - 1
