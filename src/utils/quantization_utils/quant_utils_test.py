@@ -56,4 +56,19 @@ def linear_quantization(weight, scale, num_bits):
     return torch.clamp(RoundSTE.apply(weight / scale), min_level, max_level)
 
 def linear_dequantization(weight, scale, num_bits=None):
+    print("l_d:")
+    print(f"scale: {scale.shape}", scale)
+    print(f"weight: {weight.shape}" ,weight)
+    print(weight * scale)
+    print("-------------\n")
     return weight * scale
+
+scale = torch.tensor([3.])
+T1 = torch.tensor([[1, 2, 3],
+                [4, 5, 6],
+                [7, 8, 9]])
+T1 = torch.unsqueeze(T1, 0)
+# print(scale)
+# print(T1)
+
+linear_dequantization(T1, scale)
