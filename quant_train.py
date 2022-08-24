@@ -20,6 +20,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from src.utils import *
+from src.post_quant.cle import cle_for_resmlp
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--data', metavar='DIR',
@@ -251,11 +252,11 @@ def main_worker(gpu, ngpus_per_node, args):
             logging.info("=> no checkpoint found at '{}'".format(args.resume))
 
     quantize_arch = quantize_arch_dict[args.arch]
-    if not args.regular:
-        model = quantize_arch(model)
+    model = quantize_arch(model)
+
     print("args.batch_size", args.batch_size)
     # for name, m in model.named_modules():
-    #     setattr(m, 'full_precision_flag', args.no_quant)
+    #     setattr(m, 'regular', args.regular)
     #     setattr(m, 'act_percentile', args.act_percentile)
     #     setattr(m, 'act_range_momentum', args.act_range_momentum)
     #     setattr(m, 'weight_percentile', args.weight_percentile)
@@ -610,7 +611,7 @@ def validate(val_loader, model, criterion, args):
         prefix='Test: ')
 
     # switch to evaluate mode
-    freeze_model(model)
+    set_training(model, False)
     model.eval()
 
     with torch.no_grad():
@@ -646,15 +647,12 @@ def validate(val_loader, model, criterion, args):
             "test_avg_acc5": top5.avg
         })
 
-    torch.save({'convbn_scaling_factor': {k: v for k, v in model.state_dict().items() if 'convbn_scaling_factor' in k},
-                'fc_scaling_factor': {k: v for k, v in model.state_dict().items() if 'fc_scaling_factor' in k},
-                'weight_integer': {k: v for k, v in model.state_dict().items() if 'weight_integer' in k},
-                'bias_integer': {k: v for k, v in model.state_dict().items() if 'bias_integer' in k},
-                'act_scaling_factor': {k: v for k, v in model.state_dict().items() if 'act_scaling_factor' in k},
+    torch.save({'a_s': {k: v for k, v in model.state_dict().items() if 'a_s' in k},
+                'w_int': {k: v for k, v in model.state_dict().items() if 'w_int' in k},
+                'b_int': {k: v for k, v in model.state_dict().items() if 'b_int' in k},
                 }, args.save_path + 'quantized_checkpoint.pth.tar')
 
-    unfreeze_model(model)
-
+    set_training(model, True)
     return top1.avg
 
 
