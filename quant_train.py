@@ -19,14 +19,8 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import torchvision.models as models
-
-from post_quant.cle import cle_for_resmlp
-#from utils.models.resmlp import resmlp_12, resmlp_24
-
-from bit_config import *
-from utils import *
-from pytorchcv.model_provider import get_model as ptcv_get_model
+from src.utils import *
+from src.post_quant.cle import cle_for_resmlp
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--data', metavar='DIR',
@@ -164,11 +158,7 @@ parser.add_argument('--wandb',
                     action='store_true',
                     help='if set to true, log with wandb')
 best_acc1 = 0
-quantize_arch_dict = {'resmlp24': q_resmlp24,
-                      'resnet50': q_resnet50, 'resnet50b': q_resnet50,
-                      'resnet18': q_resnet18, 'resnet101': q_resnet101,
-                      'inceptionv3': q_inceptionv3,
-                      'mobilenetv2_w1': q_mobilenetv2_w1}
+quantize_arch_dict = {'resmlp24': q_resmlp24, 'q_test': q_test}
 args = parser.parse_args()
 if not os.path.exists(args.save_path):
     os.makedirs(args.save_path)
@@ -225,42 +215,19 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.gpu is not None:
         logging.info("Use GPU: {} for training".format(args.gpu))
 
-    if args.distributed:
-        if args.dist_url == "env://" and args.rank == -1:
-            args.rank = int(os.environ["RANK"])
-        if args.multiprocessing_distributed:
-            # For multiprocessing distributed training, rank needs to be the
-            # global rank among all the processes
-            args.rank = args.rank * ngpus_per_node + gpu
-        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                                world_size=args.world_size, rank=args.rank)
     # create model
     if args.pretrained and not args.resume:
         logging.info("=> using pre-trained model '{}'".format(args.arch))
-        if args.arch == 'resmlp24':
-            model = resmlp_24(pretrained=True)
-            if args.cle:
-                cle_for_resmlp(model)
-        else:
-            model = ptcv_get_model(args.arch, pretrained=True)
-            if args.cle:
-                cle_for_resmlp(model)
-        if args.distill_method != 'None':
-            logging.info("=> using pre-trained PyTorchCV teacher '{}'".format(args.teacher_arch))
-            teacher = ptcv_get_model(args.teacher_arch, pretrained=True)
+        model = resmlp_24(pretrained=True)
+        if args.cle:
+            cle_for_resmlp(model)
+            
     else:
         logging.info("=> creating model '{}'".format(args.arch))
         if args.arch == 'resmlp24':
             model = resmlp_24(pretrained=False)
             if args.cle:
                 cle_for_resmlp(model)
-        else:
-            model = ptcv_get_model(args.arch, pretrained=False)
-            if args.cle:
-                cle_for_resmlp(model)
-        if args.distill_method != 'None':
-            logging.info("=> creating PyTorchCV teacher '{}'".format(args.teacher_arch))
-            teacher = ptcv_get_model(args.teacher_arch, pretrained=False)
 
     if args.resume and not args.resume_quantize:
         if os.path.isfile(args.resume):
@@ -285,37 +252,20 @@ def main_worker(gpu, ngpus_per_node, args):
             logging.info("=> no checkpoint found at '{}'".format(args.resume))
 
     quantize_arch = quantize_arch_dict[args.arch]
-    if not args.regular:
-        model = quantize_arch(model, full_precision_flag=args.no_quant, res_fp=args.skip_connection_fp)
-    bit_config = bit_config_dict["bit_config_" + args.arch + "_" + args.quant_scheme]
-    name_counter = 0
+    model = quantize_arch(model)
 
     print("args.batch_size", args.batch_size)
-    for name, m in model.named_modules():
-        if name in bit_config.keys():
-            name_counter += 1
-            # setattr(m, 'quant_mode', 'symmetric')
-            # setattr(m, 'bias_bit', args.bias_bit)
-            # setattr(m, 'quantize_bias', (args.bias_bit != 0))
-            # setattr(m, 'per_channel', args.channel_wise)
-            setattr(m, 'full_precision_flag', args.no_quant)
-            setattr(m, 'act_percentile', args.act_percentile)
-            setattr(m, 'act_range_momentum', args.act_range_momentum)
-            setattr(m, 'weight_percentile', args.weight_percentile)
-            setattr(m, 'fix_flag', False)
-            setattr(m, 'fix_BN', args.fix_BN)
-            setattr(m, 'fix_BN_threshold', args.fix_BN_threshold)
-            setattr(m, 'training_BN_mode', args.fix_BN)
-            setattr(m, 'checkpoint_iter_threshold', args.checkpoint_iter)
-            setattr(m, 'save_path', args.save_path)
-            
-            bitwidth = bit_config[name]
-            if hasattr(m, 'activation_bit'):
-                setattr(m, 'activation_bit', bitwidth)
-            else:
-                setattr(m, 'weight_bit', bitwidth)
-
-    logging.info("match all modules defined in bit_config: {}".format(len(bit_config.keys()) == name_counter))
+    # for name, m in model.named_modules():
+    #     setattr(m, 'regular', args.regular)
+    #     setattr(m, 'act_percentile', args.act_percentile)
+    #     setattr(m, 'act_range_momentum', args.act_range_momentum)
+    #     setattr(m, 'weight_percentile', args.weight_percentile)
+    #     setattr(m, 'fix_flag', False)
+    #     setattr(m, 'fix_BN', args.fix_BN)
+    #     setattr(m, 'fix_BN_threshold', args.fix_BN_threshold)
+    #     setattr(m, 'training_BN_mode', args.fix_BN)
+    #     setattr(m, 'checkpoint_iter_threshold', args.checkpoint_iter)
+    #     setattr(m, 'save_path', args.save_path)
     logging.info(model)
 
     if args.resume and args.resume_quantize:
@@ -339,31 +289,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # print(model.state_dict())
         # return
 
-    if args.distributed:
-        # For multiprocessing distributed, DistributedDataParallel constructor
-        # should always set the single device scope, otherwise,
-        # DistributedDataParallel will use all available devices.
-        if args.gpu is not None:
-            torch.cuda.set_device(args.gpu)
-            model.cuda(args.gpu)
-            # When using a single GPU per process and per
-            # DistributedDataParallel, we need to divide the batch size
-            # ourselves based on the total number of GPUs we have
-            args.batch_size = int(args.batch_size / ngpus_per_node)
-            args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-            if args.distill_method != 'None':
-                teacher.cuda(args.gpu)
-                teacher = torch.nn.parallel.DistributedDataParallel(teacher, device_ids=[args.gpu])
-        else:
-            model.cuda()
-            # DistributedDataParallel will divide and allocate batch_size to all
-            # available GPUs if device_ids are not set
-            model = torch.nn.parallel.DistributedDataParallel(model)
-            if args.distill_method != 'None':
-                teacher.cuda()
-                teacher = torch.nn.parallel.DistributedDataParallel(teacher)
-    elif args.gpu is not None:
+    if args.gpu is not None:
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
         if args.distill_method != 'None':
@@ -685,7 +611,7 @@ def validate(val_loader, model, criterion, args):
         prefix='Test: ')
 
     # switch to evaluate mode
-    freeze_model(model)
+    set_training(model, False)
     model.eval()
 
     with torch.no_grad():
@@ -721,15 +647,12 @@ def validate(val_loader, model, criterion, args):
             "test_avg_acc5": top5.avg
         })
 
-    torch.save({'convbn_scaling_factor': {k: v for k, v in model.state_dict().items() if 'convbn_scaling_factor' in k},
-                'fc_scaling_factor': {k: v for k, v in model.state_dict().items() if 'fc_scaling_factor' in k},
-                'weight_integer': {k: v for k, v in model.state_dict().items() if 'weight_integer' in k},
-                'bias_integer': {k: v for k, v in model.state_dict().items() if 'bias_integer' in k},
-                'act_scaling_factor': {k: v for k, v in model.state_dict().items() if 'act_scaling_factor' in k},
+    torch.save({'a_s': {k: v for k, v in model.state_dict().items() if 'a_s' in k},
+                'w_int': {k: v for k, v in model.state_dict().items() if 'w_int' in k},
+                'b_int': {k: v for k, v in model.state_dict().items() if 'b_int' in k},
                 }, args.save_path + 'quantized_checkpoint.pth.tar')
 
-    unfreeze_model(model)
-
+    set_training(model, True)
     return top1.avg
 
 
