@@ -15,6 +15,46 @@ def update_ema(biased_ema, value, decay, step):
     unbiased_ema = biased_ema / (1 - decay ** step)  # Bias correction
     return biased_ema, unbiased_ema
 
+class MinMaxObserver(nn.Module):
+    def __init__(self, num_bits, remember_old=True):
+        super(MinMaxObserver, self).__init__()
+        self.num_bits = num_bits
+        self.register_buffer('min_val', torch.tensor([float("inf")], requires_grad=False))
+        self.register_buffer('max_val', torch.tensor([float("-inf")], requires_grad=False))
+
+    def get_min_max(self):
+        return self.min_val, self.max_val
+
+    def get_quant_scale(self, sat_val):
+        if any (sat_val < 0):
+            raise ValueError('Saturation value must be >= 0')
+
+        n = signed_max_bits(self.num_bits)
+        # If float values are all 0, we just want the quantized values to be 0 as well. So overriding the saturation
+        # value to 'n', so the scale becomes 1
+        sat_val[sat_val == 0] = n
+        # scale = torch.clamp(sat_val, min=1e-8) / n
+        scale = sat_val / n
+        return scale
+
+    def forward(self, x_orig):
+        x = x_orig.detach()
+        x = x.to(self.min_val.dtype)
+        min_val_cur, max_val_cur = torch.aminmax(x)
+        
+        if self.remember_old:
+            min_val = torch.min(min_val_cur, self.min_val)
+            max_val = torch.max(max_val_cur, self.max_val)
+            self.min_val.copy_(min_val)
+            self.max_val.copy_(max_val)
+            abs_max_val = torch.max(min_val.abs(), max_val.abs())
+        else:
+            abs_max_val = torch.max(min_val_cur.abs(), max_val_cur.abs())
+
+        return self.get_quant_scale(abs_max_val)
+        
+ 
+
 class QLinear(Module):
     def __init__(self,
             linear,
@@ -29,6 +69,7 @@ class QLinear(Module):
         self.bias_bit = bias_bit
         self.training = training
         self.regular = regular
+        self.observer = MinMaxObserver(weight_bit, remember_old=True)
         self.set_param(linear)
 
     def __repr__(self):
@@ -61,18 +102,18 @@ class QLinear(Module):
         if self.training:
             if a_s == None: raise ValueError('Should not be None during QAT!')
 
-            current_min, current_max = input.min(), input.max() 
-            max_abs = max(abs(current_min), abs(current_max))
-            self.w_s = get_quant_scale(max_abs, self.weight_bit)
-            b_s = self.w_s * a_s
+            self.w_s = self.observer(self.linear.weight, self.weight_bit)
             
             x_int8 = linear_quant(input, a_s, self.weight_bit)
             self.w_int = linear_quant(self.linear.weight, self.w_s, self.weight_bit)
+
+            b_s = a_s * self.w_s
+            # print("scales: ", a_s, self.w_s, b_s)
             self.b_int = linear_quant(self.linear.bias, b_s, self.bias_bit) if self.has_bias else None
 
-            out_int32 = F.linear(x_int8, weight=self.w_int, bias=self.b_int)
-            out_fp = linear_dequant(out_int32, b_s)
-            return out_fp, b_s
+            out_int32 = RoundSTE.apply(F.linear(x_int8, weight=self.w_int, bias=self.b_int))
+            # out_fp = linear_dequant(out_int32, b_s)
+            return out_int32 * b_s, b_s
 
         else: #input: int8 instead
             if a_s != None: raise ValueError('Should not have value during Validation!')
@@ -82,33 +123,29 @@ class QLinear(Module):
 
 class QAct(Module):
     def __init__(self,
-                 num_bit=8,
-                 prev_bit=32,
+                 from_bit=32,
+                 to_bit=8,
+                 mult_bit=16,
                  ema_decay=0.999, 
-                 training=True,
                  ReLU_clip=False,
+                 training=True,
                  regular=False,
                  ):
         super(QAct, self).__init__()
-        self.num_bit = num_bit
-        self.prev_bit = prev_bit
+        self.from_bit = from_bit
+        self.to_bit = to_bit
+        self.mult_bit = mult_bit
         self.training = training
         self.ReLU_clip = ReLU_clip
         self.regular = regular
-
-        self.register_buffer('ema_decay', torch.tensor(ema_decay))
-        self.register_buffer('tracked_min_biased', torch.zeros(1))
-        self.register_buffer('tracked_min', torch.zeros(1))
-        self.register_buffer('tracked_max_biased', torch.zeros(1))
-        self.register_buffer('tracked_max', torch.zeros(1))
-        self.register_buffer('iter_count', torch.zeros(1))
+        self.observer = MinMaxObserver(to_bit, remember_old=True)
 
         self.register_buffer('mult', torch.ones(1))
         self.register_buffer('shift', torch.ones(1))
 
     def __repr__(self):
         s = super(QAct, self).__repr__()
-        s = f"({s} num_bit={self.num_bit}, training={self.training}, ReLU_clip={self.ReLU_clip}, regular={self.regular})"
+        s = f"({s} to_bit={self.to_bit}, mult_bit={self.mult_bit}, training={self.training}, ReLU_clip={self.ReLU_clip}, regular={self.regular})"
         return s
 
     def set_training(self, set=True):
@@ -122,39 +159,35 @@ class QAct(Module):
             return input, None
         
         if self.training:
-                # current_min, current_max = input.min(), input.max() 
-                # self.iter_count += 1
-                # self.tracked_min_biased, self.tracked_min = update_ema(self.tracked_min_biased, current_min, self.ema_decay, self.iter_count)
-                # self.tracked_max_biased, self.tracked_max = update_ema(self.tracked_max_biased, current_max, self.ema_decay, self.iter_count)
-
-                # max_abs = max(abs(self.tracked_min), abs(self.tracked_max))
-                # current_min, current_max = get_percentile_min_max(input.detach().view(-1), 100 - 90, 90, output_tensor=True)
-            current_min, current_max = input.min(), input.max() 
-            max_abs = max(abs(current_min), abs(current_max))
-            org_scale = get_quant_scale(max_abs, self.num_bit)
+            org_scale = self.observer(input)
+            # print("min, max: ", self.observer.get_min_max())
+            # print("OBS: ", org_scale)
    
             if a_s == None:
-                # x_int8 = linear_quant(input, org_scale, self.num_bit)
-                # x_fp   = linear_dequant(x_int8, org_scale, self.num_bit)
-                x_fp   = LinearQuantizeSTE.apply(input, org_scale, self.num_bit, True)
-                return x_fp, org_scale
+                # scale = (1. / org_scale.type(torch.double)).type(torch.float)
+                # self.mult, self.shift = get_scale_approx(scale, self.mult_bit)
+                # print("mult, shift: ", self.mult, self.shift)
+
+                # x_int8 = DyadicQuantizeSTE.apply(input, self.mult, self.shift, self.to_bit)
+                # x_int8 = LinearQuantizeSTE.apply(input, org_scale, self.to_bit, True)
+                x_int8 = LinearQuantizeSTE.apply(input, org_scale, self.to_bit)
+                return x_int8*org_scale, org_scale
                 
             else :
                 print("hi")
-                x_fp   = LinearQuantizeSTE.apply(input, a_s / org_scale, self.num_bit, True)
-                return x_fp, a_s / org_scale
-
-                # self.mult, self.shift = get_scale_approx(a_s / org_scale, self.num_bit)
-                # scale =  2**self.shift / self.mult
-                # x_fp   = LinearQuantizeSTE.apply(input, scale, self.num_bit, True)
-                # return x_fp, scale
+                scale = (a_s.type(torch.double) / org_scale.type(torch.double)).type(torch.float)
+                self.mult, self.shift = get_scale_approx(scale, self.mult_bit)
+                
+                input_int32 = LinearQuantizeSTE.apply(input, a_s, self.from_bit, False)
+                x_int8 = DyadicQuantizeSTE.apply(input_int32, self.mult, self.shift, self.to_bit)
+                return x_int8 * org_scale, org_scale
         
         else: #input: int8 instead
             if a_s != None: raise ValueError('Should not have value during Validation!')
 
-            print(self.mult, self.shift)
+            # print(self.mult, self.shift) // good!!!!!!!!!!!!!
             with torch.no_grad():
-                return torch.bitwise_right_shift(torch.tensor(input, dtype=torch.int64) * self.mult.int(), self.shift.int()).float(), None
+                return torch.bitwise_right_shift(input.type(torch.int64) * self.mult.int(), self.shift.int()).type(torch.float), None
 
 class QResAct(Module):
     def __init__(self,
@@ -169,6 +202,7 @@ class QResAct(Module):
         self.prev_bit = prev_bit
         self.training = training
         self.regular = regular
+        # self.observer = MinMaxObserver(to_bit, remember_old=True)
 
         self.register_buffer('ema_decay', torch.tensor(ema_decay))
         self.register_buffer('tracked_min_biased', torch.zeros(1))
@@ -209,7 +243,7 @@ class QResAct(Module):
 
                 max_abs = max(abs(current_min), abs(current_max))
                 org_scale = get_quant_scale(self.num_bit, max_abs)
-                self.res_mult, self.res_shift = get_scale_approx(res_a_s / wb_s, self.num_bit)
+                self.res_mult, self.res_shift = get_scale_approx(wb_s / res_a_s, self.num_bit)
                 self.mult, self.shift = get_scale_approx(res_a_s / org_scale, self.num_bit)
         
             x_int32 = linear_quant(input, wb_s, self.prev_bit)

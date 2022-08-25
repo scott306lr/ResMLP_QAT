@@ -1,21 +1,64 @@
 import torch
+import numpy as np
 import torch.nn as nn
 from torch.nn import Module
+from decimal import Decimal
 
-def get_scale_approx_shift(fp32_scale, mult_bits, limit=False):
-    shift_bits = torch.log2((2 ** mult_bits - 1) / fp32_scale).floor()
-    if limit: # not sure
-        shift_bits = min(mult_bits, shift_bits)
-    return shift_bits
 
-def get_scale_approx_mult(fp32_scale, shift_bits):
-    return (fp32_scale * (2 ** shift_bits)).floor()
+def signed_max_bits(b):
+    return (1 << (b-1)) - 1
 
-def get_scale_approx(fp32_scale, mult_bits, limit=False):
-    shift_bits = get_scale_approx_shift(fp32_scale, mult_bits, limit=limit)
-    multiplier = get_scale_approx_mult(fp32_scale, shift_bits)
-    return multiplier, shift_bits
+def get_scale_approx(fp32_scale: torch.Tensor, mult_bits, limit_bits=False):
+    # fp64_scale = fp32_scale.type(torch.double)
+    # shift_bits = get_scale_approx_shift(fp64_scale, mult_bits)
+    # multiplier = get_scale_approx_mult(fp64_scale, shift_bits)
+    # return multiplier.type(torch.float), shift_bits.type(torch.float)
+    m, e = torch.frexp(fp32_scale)
+    m = torch.round(m * signed_max_bits(mult_bits+1)) # unsigned has 1 bit more space than signed
+    e = mult_bits - e.type(torch.float) # right shift instead of left
 
+    if (e < 0) : raise ValueError(f'Shift value is negative! e: {e}')
+    return m, e
+
+# def dyadic_approx_quant(input, mult, shift, rescale_bits):
+#     bit_range = signed_max_bits(rescale_bits) # 127
+#     output = input.type(torch.double) * mult.type(torch.double)
+#     output = torch.round(output / (2.0 ** shift))
+#     # output_int = torch.clamp(output.type(torch.float), -bit_range, bit_range)
+#     # output_fp = torch.clamp(output.type(torch.float), -bit_range, bit_range)
+#     return torch.clamp(output.type(torch.float), -bit_range, bit_range)
+
+class DyadicQuantizeSTE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, mult, shift, rescale_bits):
+        bit_range = signed_max_bits(rescale_bits) #127
+
+        scale = (mult.type(torch.double) / (2.0 ** shift).type(torch.double)).type(torch.float)
+        output = torch.round(input * scale)
+        
+        ctx.save_for_backward(scale)
+        return torch.clamp(output, -bit_range, bit_range)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        scale, = ctx.saved_tensors
+        return grad_output * scale, None, None, None
+
+
+class LinearQuantizeSTE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, scale, num_bits):
+        output = linear_quant(input, scale)
+        ctx.save_for_backward(scale)
+
+        bit_range = signed_max_bits(num_bits)
+        return torch.clamp(output, -bit_range, bit_range)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Straight-through estimator
+        scale, = ctx.saved_tensors
+        return grad_output / scale, None, None
 
 
 class RoundSTE(torch.autograd.Function):
@@ -36,89 +79,20 @@ class FloorSTE(torch.autograd.Function):
     def backward(ctx, grad_y):
         return grad_y
 
-def DN_apply(x, mult, shift, num_bits): # multiply
-    with torch.no_grad():
-        scale = mult / 2**shift
-        bit_range = 2**(num_bits-1) -1 # 127
-        
-    return torch.clamp(RoundSTE.apply(x * scale), -bit_range, bit_range)
+def linear_quant(input, scale): # divide
+    return torch.round(input / scale)
 
-def DN_reverse(x, mult, shift, num_bits=None): # multiply
-    with torch.no_grad():
-        scale = 2**shift / mult
-
-    return x * scale
-
-def linear_quant(input, scale, num_bits): # divide
-    bit_range = 2**(num_bits-1) - 1
-    # with torch.no_grad():
-    #     bit_range = 2**(num_bits-1) - 1 # 127
-    #     print("input.shape:", input.shape)
-    #     if len(input.shape) == 4:
-    #         scale = scale.view(-1, 1, 1, 1)
-    #     elif len(input.shape) == 3: # linear layer
-    #         scale = transfer_fc_size(scale)
-    #     else: # act layer
-    #         scale = scale.view(-1)
-
-    # return RoundSTE.apply(input / scale)
-    return torch.clamp(RoundSTE.apply(input / scale), -bit_range, bit_range)
-
-def linear_dequant(input, scale, num_bits=None):
-    # if len(input.shape) == 2: # linear layer
-    #     scale = transfer_fc_size(scale)
-    # else: # act layer
-    #     scale = scale.view(-1)
-
+def linear_dequant(input, scale):
     return input * scale
 
-def generate_scale_minmax(x, num_bits):
-    current_min, current_max = x.min(), x.max()
-    abs_max = max(abs(current_min), abs(current_max))
 
-    return get_quant_scale(abs_max, num_bits)
+def get_quant_scale_tt(sat_val, num_bits):
+        if any (sat_val < 0):
+            raise ValueError('Saturation value must be >= 0')
 
-# def transfer_fc_size(input_tensor):
-#     return input_tensor.view(-1, 1, 1)
-
-def get_quant_scale(saturation_val, num_bits: int):
-    is_scalar, sat_val = _prep_saturation_val_tensor(saturation_val)
-
-    # print("is_scalar, sat_val", is_scalar, sat_val)
-
-    if any (sat_val < 0):
-        raise ValueError('Saturation value must be >= 0')
-
-    n = torch.tensor(2 ** (num_bits - 1) - 1, dtype=float)
-    # If float values are all 0, we just want the quantized values to be 0 as well. So overriding the saturation
-    # value to 'n', so the scale becomes 1
-    sat_val[sat_val == 0] = n
-    scale = torch.clamp(sat_val, min=1e-8) / n
-
-    # If input was scalar, return scalars
-    if is_scalar:
-        return scale.item()
-    
-    return scale
-
-def _prep_saturation_val_tensor(sat_val):
-    is_scalar = not isinstance(sat_val, torch.Tensor)
-    out = torch.tensor(sat_val) if is_scalar else sat_val.clone().detach()
-    if not out.is_floating_point():
-        out = out.to(torch.float32)
-    if out.dim() == 0:
-        out = out.unsqueeze(0)
-    return is_scalar, out
-
-class LinearQuantizeSTE(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, scale, num_bits, dequantize):
-        output = linear_quant(input, scale, num_bits)
-        if dequantize:
-            output = linear_dequant(output, scale)
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # Straight-through estimator
-        return grad_output, None, None, None
+        n = signed_max_bits(num_bits)
+        # If float values are all 0, we just want the quantized values to be 0 as well. So overriding the saturation
+        # value to 'n', so the scale becomes 1
+        sat_val[sat_val == 0] = n
+        scale = torch.clamp(sat_val, min=1e-8) / n
+        return scale
