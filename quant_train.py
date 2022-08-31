@@ -100,10 +100,6 @@ parser.add_argument('--fix-BN-threshold',
                     default=None,
                     help='when to start training with fixed and folded BN,'
                          'after the threshold iteration, the original fix-BN will be overwritten to be True')
-parser.add_argument('--checkpoint-iter',
-                    type=int,
-                    default=-1,
-                    help='the iteration that we save all the featuremap for analysis')
 parser.add_argument('--evaluate-times',
                     type=int,
                     default=-1,
@@ -162,10 +158,6 @@ quantize_arch_dict = {'resmlp24': q_resmlp24, 'q_test': q_test}
 args = parser.parse_args()
 if not os.path.exists(args.save_path):
     os.makedirs(args.save_path)
-
-hook_counter = args.checkpoint_iter
-hook_keys = []
-hook_keys_counter = 0
 
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%d-%b-%y %H:%M:%S', filename=args.save_path + 'log.log')
@@ -406,7 +398,6 @@ def main_worker(gpu, ngpus_per_node, args):
                 "batch_size": args.batch_size,
                 "dataset": "imagenet",
                 "data_percentage": args.data_percentage,
-                "quantize skip-add": not args.skip_connection_fp,
             })
 
     best_epoch = 0
@@ -644,6 +635,8 @@ def validate(val_loader, model, criterion, args):
                 'b_int': {k: v for k, v in model.state_dict().items() if 'b_int' in k},
                 }, args.save_path + 'quantized_checkpoint.pth.tar')
 
+                
+    logging.info(model.state_dict().items())
     set_training(model, True)
     return top1.avg
 
