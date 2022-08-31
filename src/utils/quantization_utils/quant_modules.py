@@ -123,9 +123,9 @@ class QLinear(Module):
 
     def set_param(self, linear):
         # self.register_buffer('w_s', torch.zeros(1)) #not needed, just for analyzing purpose
-        self.register_buffer('w_int', torch.zeros_like(linear.weight))
+        self.register_buffer('w_int', torch.zeros_like(linear.weight, requires_grad=False))
         if self.has_bias:
-            self.register_buffer('b_int', torch.zeros_like(linear.bias))
+            self.register_buffer('b_int', torch.zeros_like(linear.bias, requires_grad=False))
         else:
             self.b_int = None
 
@@ -188,8 +188,8 @@ class QAct(Module):
         self.from_fp32 = from_fp32
         self.observer = MovingAverageMinMaxObserver(to_bit)
 
-        self.register_buffer('mult', torch.ones(1))
-        self.register_buffer('shift', torch.ones(1))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False))
 
     def __repr__(self):
         s = super(QAct, self).__repr__()
@@ -263,10 +263,10 @@ class QResAct(Module):
         self.to_fp32 = to_fp32
         self.observer = MovingAverageMinMaxObserver(to_bit)
         
-        self.register_buffer('res_mult', torch.ones(1))
-        self.register_buffer('res_shift', torch.ones(1))
-        self.register_buffer('mult', torch.ones(1))
-        self.register_buffer('shift', torch.ones(1))
+        self.register_buffer('res_mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('res_shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False))
 
     def __repr__(self):
         s = super(QResAct, self).__repr__()
@@ -315,12 +315,12 @@ class QResAct(Module):
             if a_s != None or res_a_s != None : raise ValueError('Should not have value during Validation!')
 
             with torch.no_grad():
-                # res_x_int32 = DyadicQuantizeSTE.apply(res_fp, self.res_mult, self.res_shift, self.to_bit)
-                # mix_int32 = input + res_x_int32
-                # out = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit)
-                res_x_int32 = torch.bitwise_right_shift(res_fp.type(torch.int64) * self.res_mult.int(), self.res_shift.int())
-                mix_int32 = input.type(torch.int64) + res_x_int32
-                out = torch.bitwise_right_shift(mix_int32 * self.mult.int(), self.shift.int()).type(torch.float)
+                res_x_int32 = DyadicQuantizeSTE.apply(res_fp, self.res_mult, self.res_shift, self.to_bit)
+                mix_int32 = input + res_x_int32
+                out = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit)
+                # res_x_int32 = torch.bitwise_right_shift(res_fp.type(torch.int64) * self.res_mult.int(), self.res_shift.int())
+                # mix_int32 = input.type(torch.int64) + res_x_int32
+                # out = torch.bitwise_right_shift(mix_int32 * self.mult.int(), self.shift.int()).type(torch.float)
                 if self.to_fp32:
                     scale = self.observer.get_scale()
                     return out * scale, scale
