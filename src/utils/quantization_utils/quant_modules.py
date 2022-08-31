@@ -228,7 +228,7 @@ class QAct(Module):
                 scale = (a_s.type(torch.double) / org_scale.type(torch.double)).type(torch.float)
                 self.mult, self.shift = get_scale_approx(scale, self.mult_bit)
                 
-                x_int8 = DyadicQuantizeSTE.apply(input_int32, self.mult, self.shift, self.to_bit)
+                x_int8 = DyadicQuantizeSTE.apply(input_int32, self.mult, self.shift, self.to_bit, scale)
 
             return x_int8 * org_scale, org_scale
         
@@ -304,9 +304,9 @@ class QResAct(Module):
             self.mult, self.shift = get_scale_approx(scale, self.mult_bit)
 
             # step 4: rescale residual input down, add up inputs, then rescale again
-            res_x_int32 = DyadicQuantizeSTE.apply(res_x_int8, self.res_mult, self.res_shift, self.to_bit)
+            res_x_int32 = DyadicQuantizeSTE.apply(res_x_int8, self.res_mult, self.res_shift, self.to_bit, scale0)
             mix_int32 = x_int32 + res_x_int32
-            out_int8 = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit)
+            out_int8 = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit, scale)
 
             return out_int8*org_scale, org_scale
 

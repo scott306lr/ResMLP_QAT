@@ -20,30 +20,26 @@ def get_scale_approx(fp32_scale: torch.Tensor, mult_bits, limit_bits=False):
     if (new_e < 0) : raise ValueError(f'Shift value is negative! e: {new_e}, org_e: {-e}')
     return m, new_e
 
-# def dyadic_approx_quant(input, mult, shift, rescale_bits):
-#     bit_range = signed_max_bits(rescale_bits) # 127
-#     output = input.type(torch.double) * mult.type(torch.double)
-#     output = torch.round(output / (2.0 ** shift))
-#     # output_int = torch.clamp(output.type(torch.float), -bit_range, bit_range)
-#     # output_fp = torch.clamp(output.type(torch.float), -bit_range, bit_range)
-#     return torch.clamp(output.type(torch.float), -bit_range, bit_range)
 
 class DyadicQuantizeSTE(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, mult, shift, rescale_bits):
+    def forward(ctx, input, mult, shift, rescale_bits, grad_scale=None):
         bit_range = signed_max_bits(rescale_bits) #127
 
         scale = (mult.type(torch.double) / (2.0 ** shift).type(torch.double)).type(torch.float)
         output = torch.round(input * scale) #torch.floor(input * scale)
         # output = torch.bitwise_right_shift(input.type(torch.int64)*mult.type(torch.int64), shift.type(torch.int64)).type(torch.float)
         
-        ctx.save_for_backward(scale)
+        ctx.save_for_backward(grad_scale)
         return torch.clamp(output, -bit_range, bit_range)
     
     @staticmethod
     def backward(ctx, grad_output):
         scale, = ctx.saved_tensors
-        return grad_output * scale, None, None, None
+        if scale is None:
+            return grad_output, None, None, None, None
+
+        return grad_output * scale, None, None, None, None
 
 
 class LinearQuantizeSTE(torch.autograd.Function):
