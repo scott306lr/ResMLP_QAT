@@ -17,11 +17,13 @@ class QPatchEmbed(nn.Module):
     def set_param(self, patch):
         self.proj = QConv2d(patch.proj, regular=True)
         self.norm = nn.Identity()
+        self.act  = QAct(from_fp32=True)
     
     def forward(self, x, a_s=None):
         # forward using the quantized modules
         x, a_s = self.proj(x, a_s)
         x = x.flatten(2).transpose(1, 2)
+        x, a_s = self.act(x, a_s)
         x = self.norm(x)
 
         return x, a_s
@@ -46,11 +48,11 @@ class Q_Mlp(nn.Module):
         return x, a_s
 
 class QLayer_Block(nn.Module):
-    def __init__(self, block):
+    def __init__(self, block, layer):
         super(QLayer_Block, self).__init__()
-        self.set_param(block)
+        self.set_param(block, layer)
 
-    def set_param(self, block):        
+    def set_param(self, block, layer):        
         self.norm1 = QLinear(block.norm1)
         self.act1 = QAct()
 
@@ -58,8 +60,8 @@ class QLayer_Block(nn.Module):
         self.act2 = QAct()
 
         self.gamma_1 = QLinear(block.gamma_1)
-        #self.add_1 = QResAct()
-        self.ta1 = QAct()
+        self.add_1 = QResAct()
+        # self.ta1 = QAct(to_bit=16)
 
         self.norm2 = QLinear(block.norm2)
         self.act3 = QAct()
@@ -67,8 +69,12 @@ class QLayer_Block(nn.Module):
         self.mlp = Q_Mlp(block.mlp)
 
         self.gamma_2 = QLinear(block.gamma_2)
-        #self.add_2 = QResAct()
-        self.ta2 = QAct()
+
+        if layer == 23:
+            self.add_2 = QResAct(to_fp32=True)
+        else:
+            self.add_2 = QResAct()
+        # self.ta2 = QAct(to_bit=16)
 
     # ! this implementation only works for per-tensor (transpose)
     def forward(self, x, a_s=None):
@@ -84,10 +90,10 @@ class QLayer_Block(nn.Module):
         x = x.transpose(1,2)
 
         x, a_s = self.gamma_1(x, a_s)
-        #x, a_s = self.add_1(x, a_s, org_x, org_a_s)
-        x = x + org_x
-        a_s = None
-        x, a_s = self.ta1(x, a_s)
+        x, a_s = self.add_1(x, a_s, org_x, org_a_s)
+        # a_s = None
+        # x = x + org_x
+        # x, a_s = self.ta1(x, a_s)
         # ----- Cross-patch sublayer ----- END
         org_x, org_a_s = x, a_s
         
@@ -98,10 +104,10 @@ class QLayer_Block(nn.Module):
         x, a_s = self.mlp(x, a_s)
 
         x, a_s = self.gamma_2(x, a_s)
-        #x, a_s = self.add_2(x, a_s, org_x, org_a_s)
-        x = x + org_x
-        a_s = None
-        x, a_s = self.ta2(x, a_s)
+        x, a_s = self.add_2(x, a_s, org_x, org_a_s)
+        # a_s = None
+        # x = x + org_x
+        # x, a_s = self.ta2(x, a_s)
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
@@ -111,11 +117,10 @@ class Q_ResMLP24(nn.Module):
     """
     def __init__(self, model):
         super().__init__()
-        self.quant_input = QAct()
+        # self.quant_input = QAct()
         self.quant_patch = QPatchEmbed(model.patch_embed)
-        self.act = QAct()
-        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i]) for i in range(24)])
-        self.norm = model.norm#QLinear(getattr(model, 'norm'))
+        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i) for i in range(24)])
+        self.norm = model.norm#QLinear(model.norm) #model.norm
         self.head = model.head#QLinear(getattr(model, 'head'))
 
     def forward(self, x):
@@ -125,14 +130,14 @@ class Q_ResMLP24(nn.Module):
         #x, a_s = self.quant_input(x)
         # print("after", x[0][0][0])
         a_s = None
+        # x, a_s = self.quant_input(x, a_s)
         x, a_s = self.quant_patch(x, a_s)
         # print(x.shape)
         # return
 
-        x, a_s = self.act(x, a_s)
         for i, blk in enumerate(self.blocks):
             x, a_s = blk(x, a_s)
-
+   
         #! all fp32 below
         x = self.norm(x)
         x = x.mean(dim=1).reshape(B,1,-1)

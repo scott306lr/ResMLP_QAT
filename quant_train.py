@@ -411,40 +411,34 @@ def main_worker(gpu, ngpus_per_node, args):
 
     best_epoch = 0
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        if args.distill_method != 'None':
-            train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_loader,
-                     args, ngpus_per_node, dataset_length)
-        else:
-            train(train_loader, model, criterion, optimizer, epoch, args)
-
+        train(train_loader, model, criterion, optimizer, epoch, args)
         acc1 = validate(val_loader, model, criterion, args)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
 
-        logging.info(f'Best acc at epoch {epoch}: {best_acc1}')
+        # record the best epoch
         if is_best:
-            # record the best epoch
             best_epoch = epoch
+        
+        logging.info(f'Best acc at epoch {best_epoch}: {best_acc1}')
 
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                                                    and args.rank % ngpus_per_node == 0):
-            if not os.path.exists(args.save_path):
-                os.makedirs(args.save_path)
+        # saving
+        if not os.path.exists(args.save_path):
+            os.makedirs(args.save_path)
 
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer': optimizer.state_dict(),
-            }, is_best, args.save_path)
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'best_acc1': best_acc1,
+            'optimizer': optimizer.state_dict(),
+        }, is_best, args.save_path)
+        
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
@@ -459,10 +453,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
-    if args.fix_BN == True:
-        model.eval()
-    else:
-        model.train()
+    set_training(model, True)
+    model.train()
 
     end = time.time()
     for i, (images, target) in enumerate(train_loader):
