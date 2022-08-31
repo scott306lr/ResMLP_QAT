@@ -167,16 +167,8 @@ class QLinear(Module):
         # On Validation (inputs are quantized values)
         else: 
             with torch.no_grad():
-                # print("Linear Training, w_int: ", self.w_int)
-
                 return F.linear(input, weight=self.w_int, bias=self.b_int), None
 
-                #fp first
-                # x_int8 = input / a_s # quant back, no need to clamp again
-                # w_s = self.observer.get_scale()
-                # b_s = a_s * w_s
-                # out_int32 = F.linear(x_int8, weight=self.w_int, bias=self.b_int)
-                # return out_int32 * b_s, b_s
 
 class QAct(Module):
     def __init__(self,
@@ -251,22 +243,8 @@ class QAct(Module):
                     scale = self.observer.get_scale()
                     return LinearQuantizeSTE.apply(input, scale, self.to_bit), None
                 else:
+                    # return torch.bitwise_right_shift(input.type(torch.int64) * self.mult.int(), self.shift.int()).type(torch.float), None
                     return DyadicQuantizeSTE.apply(input, self.mult, self.shift, self.to_bit), None
-
-                # test fp first
-                # org_scale = self.observer.get_scale()
-    
-                # if a_s == None:
-                #     x_int8 = LinearQuantizeSTE.apply(input, org_scale, self.to_bit)
-                    
-                # else :
-                #     input_int32 = input / a_s #quant back, no need to clamp again
-                #     x_int8 = DyadicQuantizeSTE.apply(input_int32, self.mult, self.shift, self.to_bit)
-                #     # x_int8 = torch.bitwise_right_shift(input_int32.type(torch.int64) * self.mult.int(), self.shift.int()).type(torch.float)
-
-                #     # bit_range = signed_max_bits(self.to_bit)
-                #     # x_int8 = torch.clamp(x_int8, -bit_range, bit_range)
-                # return x_int8 * org_scale, org_scale
 
 
 class QResAct(Module):
@@ -336,38 +314,20 @@ class QResAct(Module):
         else:
             if a_s != None or res_a_s != None : raise ValueError('Should not have value during Validation!')
 
-            # res_x_int32 = torch.bitwise_right_shift(res_fp.type(torch.int64) * self.res_mult.int(), self.res_shift.int())
-            # mix_int32 = input.type(torch.int64) + res_x_int32
-            # return torch.bitwise_right_shift(mix_int32 * self.mult.int(), self.shift.int()).type(torch.float), None
             with torch.no_grad():
-                res_x_int32 = DyadicQuantizeSTE.apply(res_fp, self.res_mult, self.res_shift, self.to_bit)
-                mix_int32 = input + res_x_int32
+                # res_x_int32 = DyadicQuantizeSTE.apply(res_fp, self.res_mult, self.res_shift, self.to_bit)
+                # mix_int32 = input + res_x_int32
+                # out = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit)
+                res_x_int32 = torch.bitwise_right_shift(res_fp.type(torch.int64) * self.res_mult.int(), self.res_shift.int())
+                mix_int32 = input.type(torch.int64) + res_x_int32
+                out = torch.bitwise_right_shift(mix_int32 * self.mult.int(), self.shift.int()).type(torch.float)
                 if self.to_fp32:
                     scale = self.observer.get_scale()
-                    # print(DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit) * scale, scale)
-                    return DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit) * scale, scale
+                    return out * scale, scale
                 else:
-                    return DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit), None
-                
-                # test fp first
-                x_int32     = input / a_s
-                res_x_int8  = res_fp / res_a_s
+                    return out, None            
 
-                org_scale = self.observer.get_scale()
-
-                bit_range = signed_max_bits(self.to_bit)
-                # res_x_int32 = DyadicQuantizeSTE.apply(res_x_int8, self.res_mult, self.res_shift, self.to_bit)
-                res_x_int32 = torch.bitwise_right_shift(res_x_int8.type(torch.int64) * self.res_mult.int(), self.res_shift.int())
-                res_x_int32 = torch.clamp(res_x_int32, -bit_range, bit_range)
-                # mix_int32 = x_int32 + res_x_int32
-                mix_int32 = x_int32 .type(torch.int64) + res_x_int32
-                # out_int8 = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit)
-                out_int8 = torch.bitwise_right_shift(mix_int32 * self.mult.int(), self.shift.int()).type(torch.float)
-                out_int8 = torch.clamp(out_int8, -bit_range, bit_range)
-
-                return out_int8*org_scale, org_scale
-
-
+#! Not used, hasn't correctly implemented yet
 class QConv2d(Module):
     def __init__(self,
                  conv,

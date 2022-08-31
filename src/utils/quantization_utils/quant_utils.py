@@ -33,19 +33,9 @@ class DyadicQuantizeSTE(torch.autograd.Function):
     def forward(ctx, input, mult, shift, rescale_bits):
         bit_range = signed_max_bits(rescale_bits) #127
 
-        # output = torch.round(input * scale)
-        # to_shift = (2.0 ** shift).type(torch.double)
-        # output = torch.bitwise_right_shift(input.type(torch.int64)*mult.type(torch.int64), shift.type(torch.int64)).type(torch.float)
-        # output = torch.round(output.type(torch.double) / to_shift).type(torch.float)
         scale = (mult.type(torch.double) / (2.0 ** shift).type(torch.double)).type(torch.float)
         output = torch.round(input * scale) #torch.floor(input * scale)
         # output = torch.bitwise_right_shift(input.type(torch.int64)*mult.type(torch.int64), shift.type(torch.int64)).type(torch.float)
-        # print("Compare:")
-        # print("1:")
-        # print(torch.floor(input * scale))
-        # print("2:")
-        # print(output)
-        
         
         ctx.save_for_backward(scale)
         return torch.clamp(output, -bit_range, bit_range)
