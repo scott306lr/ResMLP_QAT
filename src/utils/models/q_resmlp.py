@@ -9,7 +9,7 @@ from timm.models.layers import trunc_normal_,  DropPath
 
 # from resmlp import resmlp_24
 class QPatchEmbed(nn.Module):
-    def __init__(self, patch, bias_bit=None, to_bit=16):
+    def __init__(self, patch, bias_bit=None, to_bit=8):
         super(QPatchEmbed, self).__init__()
         self.bias_bit = bias_bit
         self.set_param(patch, to_bit)

@@ -249,7 +249,7 @@ class QAct(Module):
 
 class QResAct(Module):
     def __init__(self,
-                 to_bit=10,
+                 to_bit=16,
                  mult_bit=16,
                  training=True,
                  regular=False,
