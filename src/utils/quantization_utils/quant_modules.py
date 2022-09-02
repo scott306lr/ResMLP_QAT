@@ -15,7 +15,7 @@ class MinMaxObserver(nn.Module):
         self.remember_old = remember_old
         self.register_buffer('min_val', torch.tensor([float("inf")], requires_grad=False))
         self.register_buffer('max_val', torch.tensor([float("-inf")], requires_grad=False))
-        self.register_buffer('scale', torch.tensor(torch.zeros(1), requires_grad=False))
+        self.register_buffer('scale', torch.zeros(1, requires_grad=False))
 
     def get_min_max(self):
         return self.min_val, self.max_val
@@ -59,7 +59,7 @@ class MovingAverageMinMaxObserver(nn.Module):
         self.averaging_constant = averaging_constant
         self.register_buffer('min_val', torch.tensor(float("inf"), requires_grad=False))
         self.register_buffer('max_val', torch.tensor(float("-inf"), requires_grad=False))
-        self.register_buffer('scale', torch.tensor(torch.zeros(1), requires_grad=False))
+        self.register_buffer('scale', torch.zeros(1, requires_grad=False))
 
     def get_min_max(self):
         return self.min_val, self.max_val
@@ -159,7 +159,7 @@ class QLinear(Module):
             self.b_int = LinearQuantizeSTE.apply(self.linear.bias, b_s, self.bias_bit) if self.has_bias else None
 
             # step 4: perform linear operation with quantized values
-            out_int32 = RoundSTE.apply(F.linear(x_int8, weight=self.w_int, bias=self.b_int))
+            out_int32 = F.linear(x_int8, weight=self.w_int, bias=self.b_int) #? Removed RoundSTE.apply() here, I think we don't need it here?
 
             # step 5: dequantize output and return
             return out_int32 * b_s, b_s
@@ -249,7 +249,7 @@ class QAct(Module):
 
 class QResAct(Module):
     def __init__(self,
-                 to_bit=16,
+                 to_bit=10,
                  mult_bit=16,
                  training=True,
                  regular=False,
@@ -277,14 +277,9 @@ class QResAct(Module):
         self.training = set
 
     def forward(self, input, a_s=None, res_fp=None, res_a_s=None):
+        # To ensure model is connected correctly
         if self.regular:
-            #return input + res_fp, None
-            mix_fp = input + res_fp
-            org_scale = self.observer(mix_fp)
-            self.mult, self.shift = get_scale_approx(org_scale, self.mult_bit)
-            #x_int8 = DyadicQuantizeSTE.apply(mix_fp, self.mult, self.shift, self.to_bit)
-            x_int8 = LinearQuantizeSTE.apply(mix_fp, org_scale, self.to_bit)
-            return x_int8 * org_scale, org_scale
+            return input + res_fp, None
 
         # On Training (inputs are two pairs of dequantized values with its scale to quantize back)
         if self.training:
@@ -300,7 +295,7 @@ class QResAct(Module):
             # step 3: reduction of scales to a common denominator (for RecAccel aware) (approximated with Dyadic Number)
             scale0 = (res_a_s.type(torch.double) / a_s.type(torch.double)).type(torch.float)
             scale  = (a_s.type(torch.double) / org_scale.type(torch.double)).type(torch.float)
-            self.res_mult, self.res_shift = get_scale_approx(scale0, self.mult_bit)
+            self.res_mult, self.res_shift = get_scale_approx(scale0, 8) # RecAccel aware: res_mult value fits into a matrix
             self.mult, self.shift = get_scale_approx(scale, self.mult_bit)
 
             # step 4: rescale residual input down, add up inputs, then rescale again

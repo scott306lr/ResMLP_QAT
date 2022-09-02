@@ -9,6 +9,8 @@ import logging
 import warnings
 
 import torch
+# torch.manual_seed(0) # FIX random sampler on training data
+
 import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
@@ -154,7 +156,10 @@ parser.add_argument('--wandb',
                     action='store_true',
                     help='if set to true, log with wandb')
 best_acc1 = 0
-quantize_arch_dict = {'resmlp24': q_resmlp24, 'q_test': q_test}
+
+arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_v2': resmlp_24_v2}
+quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_v2': q_resmlp_v2}
+
 args = parser.parse_args()
 if not os.path.exists(args.save_path):
     os.makedirs(args.save_path)
@@ -210,7 +215,9 @@ def main_worker(gpu, ngpus_per_node, args):
     # create model
     if args.pretrained and not args.resume:
         logging.info("=> using pre-trained model '{}'".format(args.arch))
-        model = resmlp_24(pretrained=True)
+
+        arch = arch_dict[args.arch]
+        model = arch(pretrained=True) # resmlp_24()
         if args.cle:
             cle_for_resmlp(model)
             
@@ -250,15 +257,8 @@ def main_worker(gpu, ngpus_per_node, args):
     # for name, m in model.named_modules():
     #     setattr(m, 'regular', args.regular)
     #     setattr(m, 'act_percentile', args.act_percentile)
-    #     setattr(m, 'act_range_momentum', args.act_range_momentum)
-    #     setattr(m, 'weight_percentile', args.weight_percentile)
-    #     setattr(m, 'fix_flag', False)
-    #     setattr(m, 'fix_BN', args.fix_BN)
-    #     setattr(m, 'fix_BN_threshold', args.fix_BN_threshold)
-    #     setattr(m, 'training_BN_mode', args.fix_BN)
-    #     setattr(m, 'checkpoint_iter_threshold', args.checkpoint_iter)
-    #     setattr(m, 'save_path', args.save_path)
-    logging.info(model)
+    
+    #logging.info(model)
 
     if args.resume and args.resume_quantize:
         if os.path.isfile(args.resume):
@@ -305,6 +305,8 @@ def main_worker(gpu, ngpus_per_node, args):
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
+    
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
     # optionally resume optimizer and meta information from a checkpoint
     if args.resume:
@@ -402,11 +404,12 @@ def main_worker(gpu, ngpus_per_node, args):
 
     best_epoch = 0
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch, args)
+        # adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
         acc1 = validate(val_loader, model, criterion, args)
+        scheduler.step()
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -645,13 +648,6 @@ def save_checkpoint(state, is_best, filename=None):
     torch.save(state, filename + 'checkpoint.pth.tar')
     if is_best:
         shutil.copyfile(filename + 'checkpoint.pth.tar', filename + 'model_best.pth.tar')
-
-def adjust_learning_rate(optimizer, epoch, args):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 30))
-    print('lr = ', lr)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
 
 
 def accuracy(output, target, topk=(1,)):

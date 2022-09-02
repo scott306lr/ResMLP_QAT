@@ -61,14 +61,14 @@ class QLayer_Block(nn.Module):
 
         self.gamma_1 = QLinear(block.gamma_1)
         self.add_1 = QResAct()
-        # self.ta1 = QAct(to_bit=16)
 
-        self.norm2 = QLinear(block.norm2)
-        self.act3 = QAct()
 
-        self.mlp = Q_Mlp(block.mlp)
+        # self.mlp = Q_Mlp(block.mlp)
+        
 
-        self.gamma_2 = QLinear(block.gamma_2)
+        self.fc1 = QLinear(block.mlp.fc1)
+        self.act3 = QAct(ReLU_clip=True)
+        self.fc2 = QLinear(block.mlp.fc2)
 
         if layer == 23:
             self.add_2 = QResAct(to_fp32=True)
@@ -91,23 +91,14 @@ class QLayer_Block(nn.Module):
 
         x, a_s = self.gamma_1(x, a_s)
         x, a_s = self.add_1(x, a_s, org_x, org_a_s)
-        # a_s = None
-        # x = x + org_x
-        # x, a_s = self.ta1(x, a_s)
         # ----- Cross-patch sublayer ----- END
         org_x, org_a_s = x, a_s
         
         # ---- Cross-channel sublayer ---- START
-        x, a_s = self.norm2(x, a_s)
+        x, a_s = self.fc1(x, a_s)
         x, a_s = self.act3(x, a_s)
-
-        x, a_s = self.mlp(x, a_s)
-
-        x, a_s = self.gamma_2(x, a_s)
+        x, a_s = self.fc2(x, a_s)
         x, a_s = self.add_2(x, a_s, org_x, org_a_s)
-        # a_s = None
-        # x = x + org_x
-        # x, a_s = self.ta2(x, a_s)
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
@@ -125,15 +116,8 @@ class Q_ResMLP24(nn.Module):
 
     def forward(self, x):
         B = x.shape[0]
-        # print(x[0][0][0].shape)
-        # print("before", x[0][0][0])
-        #x, a_s = self.quant_input(x)
-        # print("after", x[0][0][0])
         a_s = None
-        # x, a_s = self.quant_input(x, a_s)
         x, a_s = self.quant_patch(x, a_s)
-        # print(x.shape)
-        # return
 
         for i, blk in enumerate(self.blocks):
             x, a_s = blk(x, a_s)
@@ -147,6 +131,6 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_test(model):
+def q_resmlp_v2(model):
     net = Q_ResMLP24(model)
     return net

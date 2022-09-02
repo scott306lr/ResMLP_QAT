@@ -6,7 +6,7 @@ from timm.models.layers import trunc_normal_,  DropPath
 from torchsummary import summary
 
 __all__ = [
-    'resmlp_12', 'resmlp_24'
+    'resmlp_24'
 ]
 
 # class Affine(nn.Module):
@@ -111,16 +111,6 @@ class resmlp_models(nn.Module):
         x = self.forward_features(x)
         x = self.head(x)
         return x 
-
-@register_model
-def resmlp_12(pretrained=False, **kwargs):
-    model = resmlp_models(
-        patch_size=16, embed_dim=384, depth=12,
-        Patch_layer=PatchEmbed,
-        init_scale=0.1,**kwargs)
-    
-    model.default_cfg = _cfg()
-    return model
   
 @register_model
 def resmlp_24(pretrained=False, **kwargs):
@@ -134,6 +124,6 @@ def resmlp_24(pretrained=False, **kwargs):
         model.load_state_dict(torch.load("ResMLP_S24_ReLU_fp32_80.602.pth"))
     return model
 
-model = resmlp_12()
+# model = resmlp_24()
 # print(model)
-print(summary(model, (3, 224, 224), device="cpu"))
+# print(summary(model, (3, 224, 224), device="cpu"))

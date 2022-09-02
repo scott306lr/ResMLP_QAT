@@ -5,7 +5,7 @@ from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
 
 __all__ = [
-    'resmlp_24'
+    'resmlp_24_v2'
 ]
 
 # class Affine(nn.Module):
@@ -30,9 +30,9 @@ class layers_scale_mlp_blocks(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.skip_add = nn.quantized.FloatFunctional()
 
-        self.norm2 = Affine(dim)
+        # self.norm2 = Affine(dim)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
-        self.gamma_2 = nn.Linear(dim, dim, bias=False)
+        # self.gamma_2 = nn.Linear(dim, dim, bias=False)
         
     def forward(self, x):
         residual = x
@@ -41,7 +41,7 @@ class layers_scale_mlp_blocks(nn.Module):
         
         residual = x
         #x = self.skip_add.add(residual, self.drop_path(self.gamma_2 * self.mlp(self.norm2(x))))
-        x = self.skip_add.add(residual, self.drop_path(self.gamma_2(self.mlp(self.norm2(x)))))
+        x = self.skip_add.add(residual, self.drop_path(self.mlp(x)))
         return x 
 
 
@@ -111,7 +111,7 @@ class resmlp_models(nn.Module):
         return x 
   
 @register_model
-def resmlp_24(pretrained=False, **kwargs):
+def resmlp_24_v2(pretrained=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
@@ -119,5 +119,5 @@ def resmlp_24(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
 
     if pretrained:
-        model.load_state_dict(torch.load("ResMLP_S24_ReLU_fp32_80.602.pth"))
+        model.load_state_dict(torch.load("fuse_S24_ReLU.pth"))
     return model

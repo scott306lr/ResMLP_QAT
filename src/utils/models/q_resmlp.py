@@ -1,227 +1,149 @@
 import torch
 import torch.nn as nn
 import copy
+
 from ..quantization_utils.quant_modules import *
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
 
 # from resmlp import resmlp_24
-class Q_PatchEmbed(nn.Module):
-    """
-       Quantized PatchEmbed.
-    """
-    def __init__(self, full_precision_flag=False):
-        super(Q_PatchEmbed, self).__init__()
-        self.full_precision_flag=full_precision_flag
+class QPatchEmbed(nn.Module):
+    def __init__(self, patch, bias_bit=None, to_bit=16):
+        super(QPatchEmbed, self).__init__()
+        self.bias_bit = bias_bit
+        self.set_param(patch, to_bit)
 
-    def set_param(self, patch):
-        proj = patch.proj
-        self.proj = QuantConv2d(bias_bit=32, full_precision_flag=self.full_precision_flag)
-        self.proj.set_param(proj)
-        
-        # norm = patch.norm
-        # if norm != nn.Identity():
-        #     self.norm = QuantLinear(full_precision_flag=self.full_precision_flag)
-        #     self.norm.set_param(norm)
-        self.quant_act_int32 = QuantAct(full_precision_flag=self.full_precision_flag)
+    def set_param(self, patch, to_bit):
+        self.proj = QConv2d(patch.proj, regular=True) # Same as normal conv, with an additional ouput (value is None)
         self.norm = nn.Identity()
+        self.act  = QAct(from_fp32=True, to_bit=to_bit, regular=False) # First layer, accepts fp as input even on validation
     
-    def forward(self, x, act_scaling_factor=None):
+    def forward(self, x, a_s=None):
         # forward using the quantized modules
-        x, weight_scaling_factor = self.proj(x, act_scaling_factor)
+        x, a_s = self.proj(x, a_s)
         x = x.flatten(2).transpose(1, 2)
-        x, act_scaling_factor = self.quant_act_int32(x, act_scaling_factor, weight_scaling_factor)
+        x, a_s = self.act(x, a_s)
         x = self.norm(x)
 
-        return x, act_scaling_factor
-
+        return x, a_s
 
 class Q_Mlp(nn.Module):
-    """
-       Quantized MLP.
-    """
-    def __init__(self, bias_bit=None, full_precision_flag=False):
+    def __init__(self, mlp, regular=False):
         super(Q_Mlp, self).__init__()
-        self.bias_bit = bias_bit
-        self.full_precision_flag=full_precision_flag
+        self.set_param(mlp, regular=regular)
 
-    def set_param(self, mlp):
-        fc1 = mlp.fc1
-        self.fc1 = QuantLinear(bias_bit=self.bias_bit, full_precision_flag=self.full_precision_flag)
-        self.fc1.set_param(fc1)
-        self.quant_act1 = QuantAct(full_precision_flag=self.full_precision_flag)
-
-        fc2 = mlp.fc2
-        self.fc2 = QuantLinear(bias_bit=self.bias_bit, full_precision_flag=self.full_precision_flag)
-        self.fc2.set_param(fc2)
-        self.quant_act2 = QuantAct(full_precision_flag=self.full_precision_flag)
+    def set_param(self, mlp, regular=False):
+        self.fc1 = QLinear(mlp.fc1, regular=regular)
+        self.act1 = QAct(ReLU_clip=True, regular=regular)
+        self.fc2 = QLinear(mlp.fc2, regular=regular)
+        self.act2 = QAct(regular=regular)
     
-    def forward(self, x, act_scaling_factor=None):
+    def forward(self, x, a_s=None):
         # forward using the quantized modules
-        x, weight_scaling_factor = self.fc1(x, act_scaling_factor)
-        x = nn.ReLU()(x)
-        x, act_scaling_factor = self.quant_act1(x, act_scaling_factor, weight_scaling_factor)
-        x, weight_scaling_factor = self.fc2(x, act_scaling_factor)
-        x, act_scaling_factor = self.quant_act2(x, act_scaling_factor, weight_scaling_factor)
+        x, a_s = self.fc1(x, a_s)
+        x, a_s = self.act1(x, a_s)
+        x, a_s = self.fc2(x, a_s)
+        x, a_s = self.act2(x, a_s)
+        return x, a_s
 
-        return x, act_scaling_factor
+class QLayer_Block(nn.Module):
+    def __init__(self, block, layer):
+        super(QLayer_Block, self).__init__()
+        self.set_param(block, layer)
 
-class Q_Layer(nn.Module):
-    """
-       Quantized ResNet unit with residual path.
-    """
-    def __init__(self, full_precision_flag=False, res_fp=False):
-        super(Q_Layer, self).__init__()
-        self.full_precision_flag=full_precision_flag
-        self.res_fp=res_fp
-
-    def set_param(self, block):
-        self.quant_act = QuantAct(full_precision_flag=self.full_precision_flag)
-        
-        norm1 = block.norm1
-        self.norm1 = QuantLinear(bias_bit=32, full_precision_flag=self.full_precision_flag)
-        self.norm1.set_param(norm1)
-        self.quant_act1 = QuantAct(full_precision_flag=self.full_precision_flag)
-
-        attn = block.attn
-        self.attn = QuantLinear(bias_bit=32, full_precision_flag=self.full_precision_flag)
-        self.attn.set_param(attn)
-        self.quant_act2 = QuantAct(full_precision_flag=self.full_precision_flag)
-
-        gamma_1 = block.gamma_1
-        self.gamma_1 = QuantLinear(full_precision_flag=self.full_precision_flag)
-        self.gamma_1.set_param(gamma_1)
-        self.quant_act_int32_1 = QuantAct(full_precision_flag=self.full_precision_flag)
-
-        norm2 = block.norm2
-        self.norm2 = QuantLinear(bias_bit=32, full_precision_flag=self.full_precision_flag)
-        self.norm2.set_param(norm2)
-        self.quant_act3 = QuantAct(full_precision_flag=self.full_precision_flag)
-
-        mlp = block.mlp
-        self.mlp = Q_Mlp(bias_bit=32, full_precision_flag=self.full_precision_flag)
-        self.mlp.set_param(mlp)
-
-        gamma_2 = block.gamma_2
-        self.gamma_2 = QuantLinear(full_precision_flag=self.full_precision_flag)
-        self.gamma_2.set_param(gamma_2)
-        self.quant_act_int32_2 = QuantAct(full_precision_flag=self.full_precision_flag)
-
-    def forward(self, x, act_scaling_factor=None):
-        # Cross-patch sublayer
-        # ! this implementation only works for per-tensor (transpose)
-        identity = x
-        if not self.full_precision_flag:
-            identity_act_scaling_factor = act_scaling_factor.clone()
+    def set_param(self, block, layer):  
+        # set to 24: all quant
+        #! to make model fp only,      
+        ALL_FP_LAYER = 24 
+        if layer >= ALL_FP_LAYER:
+            #to_bit = 8
+            regular = True
         else:
-            identity_act_scaling_factor = 1
-        
-        x, weight_scaling_factor = self.norm1(x, act_scaling_factor)
+            #to_bit = 16
+            regular = False
+
+        self.norm1 = QLinear(block.norm1, regular=regular)
+        self.act1 = QAct(regular=regular)
+
+        self.attn = QLinear(block.attn, regular=regular)
+        self.act2 = QAct(regular=regular)
+
+        self.gamma_1 = QLinear(block.gamma_1, regular=regular)
+        self.add_1 = QResAct(regular=regular)
+
+        self.norm2 = QLinear(block.norm2, regular=regular)
+        self.act3 = QAct(regular=regular)
+
+        self.mlp = Q_Mlp(block.mlp, regular=regular)
+
+        self.gamma_2 = QLinear(block.gamma_2, regular=regular)
+
+        if layer == ALL_FP_LAYER-1: 
+            self.add_2 = QResAct(to_fp32=True, regular=regular) # dequant output back to fp
+        else:
+            self.add_2 = QResAct(regular=regular)
+
+    # ! this implementation only works for per-tensor (transpose)
+    def forward(self, x, a_s=None):
+        org_x, org_a_s = x, a_s
+
+        # ----- Cross-patch sublayer ----- START
+        x, a_s = self.norm1(x, a_s)
+        x, a_s = self.act1(x, a_s)
+
         x = x.transpose(1,2)
-        x, act_scaling_factor = self.quant_act1(x, act_scaling_factor, weight_scaling_factor)
-
-        x, weight_scaling_factor = self.attn(x, act_scaling_factor)
+        x, a_s = self.attn(x, a_s)
+        x, a_s = self.act2(x, a_s)
         x = x.transpose(1,2)
-        x, act_scaling_factor = self.quant_act2(x, act_scaling_factor, weight_scaling_factor)
+
+        x, a_s = self.gamma_1(x, a_s)
+        x, a_s = self.add_1(x, a_s, org_x, org_a_s)
+        # ----- Cross-patch sublayer ----- END
+        org_x, org_a_s = x, a_s
         
-        x, weight_scaling_factor = self.gamma_1(x, act_scaling_factor)
-        
-        x = x + identity
-        if not self.res_fp:
-            x, act_scaling_factor = self.quant_act_int32_1(x, act_scaling_factor, weight_scaling_factor, identity, identity_act_scaling_factor)
-        else:
-            x, act_scaling_factor = self.quant_act_int32_1(x)
+        # ---- Cross-channel sublayer ---- START
+        x, a_s = self.norm2(x, a_s)
+        x, a_s = self.act3(x, a_s)
 
-        # Cross-channel sublayer
-        identity = x
-        if not self.full_precision_flag:
-            identity_act_scaling_factor = act_scaling_factor.clone()
-        else:
-            identity_act_scaling_factor = 1
+        x, a_s = self.mlp(x, a_s)
 
-        x, weight_scaling_factor = self.norm2(x, act_scaling_factor)
-        x, act_scaling_factor = self.quant_act3(x, act_scaling_factor, weight_scaling_factor)
-
-        x, act_scaling_factor = self.mlp(x, act_scaling_factor)
-
-        x, weight_scaling_factor = self.gamma_2(x, act_scaling_factor)
-        
-        x = x + identity
-        if not self.res_fp:
-            x, act_scaling_factor = self.quant_act_int32_2(x, act_scaling_factor, weight_scaling_factor, identity, identity_act_scaling_factor)
-        else:
-            x, act_scaling_factor = self.quant_act_int32_2(x)
-
-        return x, act_scaling_factor
+        x, a_s = self.gamma_2(x, a_s)
+        x, a_s = self.add_2(x, a_s, org_x, org_a_s)
+        # ---- Cross-channel sublayer ---- END
+        return x, a_s
 
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.
     """
-    def __init__(self, model, full_precision_flag=False, res_fp=False):
+    def __init__(self, model):
         super().__init__()
-        self.full_precision_flag = full_precision_flag
-        self.res_fp = res_fp
-        patch_embed = getattr(model, 'patch_embed')
-        blocks = getattr(model, 'blocks')
-        norm = getattr(model, 'norm')
-        head = getattr(model, 'head')
-        
-        self.quant_input = QuantAct(full_precision_flag=self.full_precision_flag)
-
-        # self.quant_patch_embed_conv = QuantConv2d()
-        # self.quant_patch_embed_conv.set_param(patch_embed.proj)
-        self.quant_patch = Q_PatchEmbed(full_precision_flag=self.full_precision_flag)
-        self.quant_patch.set_param(patch_embed)
-
-        self.act = nn.ReLU()
-
-        self.channel = [2, 2, 2, 2]
-
-        for block_num in range(0, 24):
-            mlp_layer = getattr(blocks, "{}".format(block_num))
-            quant_mlp_layer = Q_Layer(full_precision_flag=self.full_precision_flag, res_fp=self.res_fp)
-            quant_mlp_layer.set_param(mlp_layer)
-            setattr(self, "layer{}".format(block_num), quant_mlp_layer)
-
-        # self.norm = QuantLinear
-        # self.norm.set_param(norm)
-        # self.quant_act_output = QuantAct()
-        # self.final_pool = QuantAveragePool2d(kernel_size=7, stride=1)
-        # self.head = QuantLinear()
-        # self.head.set_param(head)
-
-        # Currently, we use fp32 here
-        self.norm = norm
-        self.head = head
-        
-
+        # self.quant_input = QAct()
+        self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=8)
+        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i) for i in range(24)])
+        self.norm = model.norm#QLinear(model.norm) #model.norm
+        self.head = model.head#QLinear(getattr(model, 'head'))
 
     def forward(self, x):
         B = x.shape[0]
-        x, act_scaling_factor = self.quant_input(x)
-        x, act_scaling_factor = self.quant_patch(x, act_scaling_factor)
 
-        for block_num in range(0, 24):
-                tmp_func = getattr(self, f"layer{block_num}")
-                x, act_scaling_factor = tmp_func(x, act_scaling_factor)
+        a_s = None
+        # x, a_s = self.quant_input(x, a_s)
+        x, a_s = self.quant_patch(x, a_s)
 
-        #fp32
+        for i, blk in enumerate(self.blocks):
+            x, a_s = blk(x, a_s)
+   
+        #! all fp32 below
         x = self.norm(x)
-        x = x.mean(dim=1).reshape(B,1,-1)
+        x = x.mean(dim=1).reshape(B, 1, -1)
         x = x[:, 0]
         x = self.head(x)
-        # make sure x have only 2-dimensions [x] -> [[x]], [[[x]]] -> [[x]]
         x = x.view(x.size(0), -1)
         
         return x
 
-def q_resmlp24(model, full_precision_flag=False, res_fp=False):
-    net = Q_ResMLP24(model, full_precision_flag=full_precision_flag, res_fp=res_fp)
+def q_resmlp(model):
+    net = Q_ResMLP24(model)
     return net
-
-
-# model = resmlp_24()
-# model = q_resmlp24(model)
-# print(model)
