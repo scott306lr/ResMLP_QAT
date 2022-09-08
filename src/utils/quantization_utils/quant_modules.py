@@ -57,8 +57,8 @@ class MovingAverageMinMaxObserver(nn.Module):
         self.num_bits = num_bits
         self.remember_old = remember_old
         self.averaging_constant = averaging_constant
-        self.register_buffer('min_val', torch.tensor(float("inf"), requires_grad=False))
-        self.register_buffer('max_val', torch.tensor(float("-inf"), requires_grad=False))
+        self.register_buffer('min_val', torch.tensor([float("inf")], requires_grad=False))
+        self.register_buffer('max_val', torch.tensor([float("-inf")], requires_grad=False))
         self.register_buffer('scale', torch.zeros(1, requires_grad=False))
 
     def get_min_max(self):
@@ -87,6 +87,7 @@ class MovingAverageMinMaxObserver(nn.Module):
 
         if min_val.item() == float("inf") and max_val.item() == float("-inf"):
             min_val, max_val = torch.aminmax(x)
+            min_val, max_val = min_val.unsqueeze(0), max_val.unsqueeze(0)
         else:
             min_val_cur, max_val_cur = torch.aminmax(x)
             min_val = min_val + self.averaging_constant * (min_val_cur - min_val)
@@ -138,7 +139,7 @@ class QLinear(Module):
         # To ensure model is connected correctly
         if self.regular:
             if self.training:
-                return F.linear(input, weight=self.linear.weight, bias=self.linear.bias), torch.ones(1).to(self.linear.weight.device)#None
+                return F.linear(input, weight=self.linear.weight, bias=self.linear.bias), None #torch.ones(1).to(self.linear.weight.device)
             else:
                 with torch.no_grad():
                     return F.linear(input, weight=self.linear.weight, bias=self.linear.bias), None
@@ -198,6 +199,12 @@ class QAct(Module):
 
     def set_training(self, set=True):
         self.training = set
+    
+    def get_scale(self, dyadic=False):
+        if dyadic:
+            return [(self.mult, self.shift)]
+        else:
+            return [self.observer.scale]
 
     def forward(self, input, a_s=None):
         if self.ReLU_clip:
@@ -249,10 +256,11 @@ class QAct(Module):
 
 class QResAct(Module):
     def __init__(self,
-                 to_bit=16,
+                 to_bit=8,
                  mult_bit=16,
                  training=True,
                  regular=False,
+                 from_fp32=False,
                  to_fp32=False
                  ):
         super(QResAct, self).__init__()
@@ -260,6 +268,7 @@ class QResAct(Module):
         self.mult_bit = mult_bit
         self.training = training
         self.regular = regular
+        self.from_fp32 = from_fp32
         self.to_fp32 = to_fp32
         self.observer = MovingAverageMinMaxObserver(to_bit)
         
@@ -275,6 +284,15 @@ class QResAct(Module):
 
     def set_training(self, set=True):
         self.training = set
+    
+    def get_scale(self, dyadic=False):
+        if dyadic:
+            # return [(self.res_mult, self.res_shift), (self.mult, self.shift)]
+            align = (self.res_mult[0].type(torch.double) / (2.0 ** self.res_shift[0]).type(torch.double)).type(torch.float)
+            scale = (self.mult[0].type(torch.double) / (2.0 ** self.shift[0]).type(torch.double)).type(torch.float)
+            return [(align, scale)]
+        else:
+            return [self.observer.scale]
 
     def forward(self, input, a_s=None, res_fp=None, res_a_s=None):
         # To ensure model is connected correctly
@@ -282,6 +300,18 @@ class QResAct(Module):
             return input + res_fp, None
 
         # On Training (inputs are two pairs of dequantized values with its scale to quantize back)
+        if self.from_fp32:
+            if self.training:
+                sum = input + res_fp
+                scale = self.observer(sum)
+                sum_int8 = LinearQuantizeSTE.apply(sum, scale, self.to_bit)
+                return sum_int8 * scale, scale
+            else:
+                sum = input + res_fp
+                scale = self.observer.get_scale()
+                sum_int8 = LinearQuantizeSTE.apply(sum, scale, self.to_bit)
+                return sum * scale, scale
+            
         if self.training:
             if a_s == None or res_a_s == None : raise ValueError('Should not be None during QAT!')
 
@@ -320,7 +350,7 @@ class QResAct(Module):
                     scale = self.observer.get_scale()
                     return out * scale, scale
                 else:
-                    return out, None            
+                    return out, None
 
 #! Not used, hasn't correctly implemented yet
 class QConv2d(Module):
@@ -337,6 +367,7 @@ class QConv2d(Module):
         self.bias_bit = bias_bit
         self.training = training
         self.regular = regular
+        self.observer = MovingAverageMinMaxObserver(weight_bit)
         self.set_param(conv)
         
     def __repr__(self):
@@ -345,8 +376,12 @@ class QConv2d(Module):
         return s
 
     def set_param(self, conv):
-        self.register_buffer('w_s', torch.zeros(1))
         self.register_buffer('w_int', torch.zeros_like(conv.weight))
+        if self.has_bias:
+            self.register_buffer('b_int', torch.zeros_like(conv.bias, requires_grad=False))
+        else:
+            self.b_int = None
+            
         self.conv = conv
 
     def set_training(self, set=True):
@@ -361,40 +396,37 @@ class QConv2d(Module):
                 return F.conv2d(input, self.conv.weight, self.conv.bias, self.conv.stride, self.conv.padding,
                                 self.conv.dilation, self.conv.groups), None
 
+        # On Training (inputs are dequantized values with its scale to quantize back)
         if self.training:
-            if a_s == None: raise ValueError('Should not have value during QAT!')
+            if a_s == None: raise ValueError('Should not be None during QAT!')
 
-            with torch.no_grad():
-                w_transform = self.conv.weight
-                w_min = w_transform.min()
-                w_max = w_transform.max()
-                max_abs = max(abs(w_min), abs(w_max))
-                self.w_s = get_quant_scale(self.weight_bit, max_abs)                
+            # step 1: quantize back the weights
+            x_int8 = input / a_s
+            
+            # step 2: obtain scale to quantize weight/bias
+            w_s = self.observer(self.conv.weight)
+            b_s = a_s * w_s
+            
+            # step 3: quantize weight/bias
+            self.w_int = LinearQuantizeSTE.apply(self.conv.weight, w_s, self.weight_bit)
+            self.b_int = LinearQuantizeSTE.apply(self.conv.bias, b_s, self.bias_bit) if self.has_bias else None
 
-            x_int8 = linear_quant(input, a_s, self.weight_bit)
-            self.w_int = linear_quant(self.conv.weight, self.w_s, self.weight_bit)
-            b_s = self.w_s * a_s
-            if self.has_bias:
-                self.b_int = linear_quant(self.conv.bias, b_s, self.bias_bit)
-            else:
-                self.b_int = None
+            # step 4: perform conv operation with quantized values
+            out_int32 = F.conv2d(x_int8, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups)
 
-            if self.conv.bias is None:
-                return (F.conv2d(x_int8, self.w_int, torch.ze))
+            # step 5: dequantize output and return
+            return out_int32 * b_s, b_s
 
-            out_int32 = RoundSTE.apply(F.conv2d(x_int8, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups))
-            out_fp = linear_dequant(out_int32, b_s)
-            return out_fp, b_s
-        
-        else:
+        # On Validation (inputs are quantized values)
+        else: 
             if a_s != None: raise ValueError('Should be None during validation!')
 
-            return F.conv2d(input, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups), None
-
+            with torch.no_grad():
+                return F.conv2d(input, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups), None
 
 def set_training(model, set=True):
     for n, m in model.named_modules():
-        if type(m) in [QLinear, QAct, QResAct]:
+        if type(m) in [QLinear, QAct, QResAct, QConv2d]:
             m.set_training(set)
             # print(n)
             

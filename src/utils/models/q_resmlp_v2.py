@@ -15,7 +15,7 @@ class QPatchEmbed(nn.Module):
         self.set_param(patch)
 
     def set_param(self, patch):
-        self.proj = QConv2d(patch.proj, regular=True)
+        self.proj = QConv2d(patch.proj, regular=False)
         self.norm = nn.Identity()
         self.act  = QAct(from_fp32=True)
     
@@ -108,7 +108,7 @@ class Q_ResMLP24(nn.Module):
     """
     def __init__(self, model):
         super().__init__()
-        # self.quant_input = QAct()
+        self.quant_input = QAct()
         self.quant_patch = QPatchEmbed(model.patch_embed)
         self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i) for i in range(24)])
         self.norm = model.norm#QLinear(model.norm) #model.norm
@@ -117,6 +117,7 @@ class Q_ResMLP24(nn.Module):
     def forward(self, x):
         B = x.shape[0]
         a_s = None
+        x, a_s = self.quant_input(x, a_s)
         x, a_s = self.quant_patch(x, a_s)
 
         for i, blk in enumerate(self.blocks):
