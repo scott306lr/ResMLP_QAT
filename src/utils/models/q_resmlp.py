@@ -15,10 +15,16 @@ class QPatchEmbed(nn.Module):
         self.set_param(patch, to_bit)
 
     def set_param(self, patch, to_bit):
-        self.proj = QConv2d(patch.proj, regular=True) # Same as normal conv, with an additional ouput (value is None)
+        self.proj = QConv2d(patch.proj, regular=False) # Same as normal conv, with an additional output (value is None)
         self.norm = nn.Identity()
-        self.act  = QAct(from_fp32=True, to_bit=to_bit, regular=False) # First layer, accepts fp as input even on validation
+        #! from_fp32=True, regular=False for real case. Currently Experimenting...
+        self.act  = QAct(to_bit=to_bit) # First layer, accepts fp as input even on validation
     
+    def get_scales(self, dyadic=False):
+        scales = []
+        scales += self.act.get_scale(dyadic)
+        return scales
+
     def forward(self, x, a_s=None):
         # forward using the quantized modules
         x, a_s = self.proj(x, a_s)
@@ -39,6 +45,12 @@ class Q_Mlp(nn.Module):
         self.fc2 = QLinear(mlp.fc2, regular=regular)
         self.act2 = QAct(regular=regular)
     
+    def get_scales(self, dyadic=False):
+        scales = []
+        scales += self.act1.get_scale(dyadic)
+        scales += self.act2.get_scale(dyadic)
+        return scales
+    
     def forward(self, x, a_s=None):
         # forward using the quantized modules
         x, a_s = self.fc1(x, a_s)
@@ -47,16 +59,18 @@ class Q_Mlp(nn.Module):
         x, a_s = self.act2(x, a_s)
         return x, a_s
 
+ALL_FP_LAYER = -1
 class QLayer_Block(nn.Module):
-    def __init__(self, block, layer):
+    def __init__(self, block, layer, res_to_bit):
         super(QLayer_Block, self).__init__()
+        self.layer = layer
+        self.res_to_bit = res_to_bit
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
         # set to 24: all quant
         #! to make model fp only,      
-        ALL_FP_LAYER = 24 
-        if layer >= ALL_FP_LAYER:
+        if layer == ALL_FP_LAYER:
             #to_bit = 8
             regular = True
         else:
@@ -70,7 +84,7 @@ class QLayer_Block(nn.Module):
         self.act2 = QAct(regular=regular)
 
         self.gamma_1 = QLinear(block.gamma_1, regular=regular)
-        self.add_1 = QResAct(regular=regular)
+        self.add_1 = QResAct(regular=regular, to_bit=self.res_to_bit)
 
         self.norm2 = QLinear(block.norm2, regular=regular)
         self.act3 = QAct(regular=regular)
@@ -80,10 +94,23 @@ class QLayer_Block(nn.Module):
         self.gamma_2 = QLinear(block.gamma_2, regular=regular)
 
         if layer == ALL_FP_LAYER-1: 
-            self.add_2 = QResAct(to_fp32=True, regular=regular) # dequant output back to fp
+            self.add_2 = QResAct(from_fp32=True, to_bit=self.res_to_bit) # quant fp input to int
+        elif layer == 24-1:
+            self.add_2 = QResAct(to_fp32=True, to_bit=self.res_to_bit) # dequant output back to fp
         else:
-            self.add_2 = QResAct(regular=regular)
+            self.add_2 = QResAct(regular=regular, to_bit=self.res_to_bit)
 
+    def get_scales(self, dyadic=False):
+        scales = []
+        # scales += self.act1.get_scale(dyadic)
+        # scales += self.act2.get_scale(dyadic)
+        scales += self.add_1.get_scale(dyadic)
+        # scales += self.act3.get_scale(dyadic)
+        # scales += self.mlp.get_scales(dyadic)
+        scales += self.add_2.get_scale(dyadic)
+        
+        return scales
+   
     # ! this implementation only works for per-tensor (transpose)
     def forward(self, x, a_s=None):
         org_x, org_a_s = x, a_s
@@ -113,23 +140,34 @@ class QLayer_Block(nn.Module):
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
+RES_RESCALE_BIT = 16
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.
     """
     def __init__(self, model):
         super().__init__()
-        # self.quant_input = QAct()
-        self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=8)
-        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i) for i in range(24)])
+        self.quant_input = QAct(to_bit=8, from_fp32=True, regular=False)
+        self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=RES_RESCALE_BIT)
+        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
         self.norm = model.norm#QLinear(model.norm) #model.norm
         self.head = model.head#QLinear(getattr(model, 'head'))
+
+    def get_scales(self, dyadic=False):
+        scales = []
+        # scales += self.quant_patch.get_scales()
+
+        for i, blk in enumerate(self.blocks):
+            # if i >= ALL_FP_LAYER-1 and i <= ALL_FP_LAYER+1 : 
+            scales += blk.get_scales(dyadic=dyadic)
+
+        return scales
 
     def forward(self, x):
         B = x.shape[0]
 
         a_s = None
-        # x, a_s = self.quant_input(x, a_s)
+        x, a_s = self.quant_input(x, a_s)
         x, a_s = self.quant_patch(x, a_s)
 
         for i, blk in enumerate(self.blocks):

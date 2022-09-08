@@ -215,40 +215,40 @@ def main_worker(gpu, ngpus_per_node, args):
     # create model
     if args.pretrained and not args.resume:
         logging.info("=> using pre-trained model '{}'".format(args.arch))
-
         arch = arch_dict[args.arch]
-        model = arch(pretrained=True) # resmlp_24()
-        if args.cle:
-            cle_for_resmlp(model)
-            
+        model = arch(pretrained=True)
+
     else:
         logging.info("=> creating model '{}'".format(args.arch))
-        if args.arch == 'resmlp24':
-            model = resmlp_24(pretrained=False)
-            if args.cle:
-                cle_for_resmlp(model)
+        arch = arch_dict[args.arch]
+        model = arch(pretrained=False)
 
-    if args.resume and not args.resume_quantize:
-        if os.path.isfile(args.resume):
-            logging.info("=> loading checkpoint '{}'".format(args.resume))
+    if args.cle:
+        logging.info("=> Applying CLE on model")
+        cle_for_resmlp(model)
+        
 
-            checkpoint = torch.load(args.resume)['state_dict']
-            model_key_list = list(model.state_dict().keys())
-            for key in model_key_list:
-                if 'num_batches_tracked' in key: model_key_list.remove(key)
-            i = 0
-            modified_dict = {}
-            for key, value in checkpoint.items():
-                if 'scaling_factor' in key: continue
-                if 'num_batches_tracked' in key: continue
-                if 'weight_integer' in key: continue
-                if 'min' in key or 'max' in key: continue
-                modified_key = model_key_list[i]
-                modified_dict[modified_key] = value
-                i += 1
-            logging.info(model.load_state_dict(modified_dict, strict=False))
-        else:
-            logging.info("=> no checkpoint found at '{}'".format(args.resume))
+    # if args.resume and not args.resume_quantize:
+    #     if os.path.isfile(args.resume):
+    #         logging.info("=> loading checkpoint '{}'".format(args.resume))
+
+    #         checkpoint = torch.load(args.resume)['state_dict']
+    #         model_key_list = list(model.state_dict().keys())
+    #         for key in model_key_list:
+    #             if 'num_batches_tracked' in key: model_key_list.remove(key)
+    #         i = 0
+    #         modified_dict = {}
+    #         for key, value in checkpoint.items():
+    #             if 'scaling_factor' in key: continue
+    #             if 'num_batches_tracked' in key: continue
+    #             if 'weight_integer' in key: continue
+    #             if 'min' in key or 'max' in key: continue
+    #             modified_key = model_key_list[i]
+    #             modified_dict[modified_key] = value
+    #             i += 1
+    #         logging.info(model.load_state_dict(modified_dict, strict=False))
+    #     else:
+    #         logging.info("=> no checkpoint found at '{}'".format(args.resume))
 
     quantize_arch = quantize_arch_dict[args.arch]
     model = quantize_arch(model)
@@ -263,23 +263,20 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.resume and args.resume_quantize:
         if os.path.isfile(args.resume):
             logging.info("=> loading quantized checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)['state_dict']
-            # print(checkpoint)
-            modified_dict = {}
-            for key, value in checkpoint.items():
-                if 'num_batches_tracked' in key: continue
-                if 'weight_integer' in key: continue
-                if 'bias_integer' in key: continue
+            # checkpoint = torch.load(args.resume)['state_dict']                                                                                                                                                                                                                                                                                                                                                                                                                          
+            # modified_dict = {}
+            # for key, value in checkpoint.items():
+            #     if 'num_batches_tracked' in key: continue
+            #     if 'weight_integer' in key: continue
+            #     if 'bias_integer' in key: continue
 
-                modified_key = key.replace("module.", "")
-                modified_dict[modified_key] = value
-            model.load_state_dict(modified_dict, strict=False)
+            #     modified_key = key.replace("module.", "")
+            #     modified_dict[modified_key] = value
+            # model.load_state_dict(modified_dict, strict=False)
+            # print(torch.load(args.resume)['state_dict'])
+            model.load_state_dict(torch.load(args.resume)['state_dict'])
         else:
             logging.info("=> no quantized checkpoint found at '{}'".format(args.resume))
-        # print(model)
-        # print("qmodel state dict: ")
-        # print(model.state_dict())
-        # return
 
     if args.gpu is not None:
         torch.cuda.set_device(args.gpu)
@@ -309,24 +306,24 @@ def main_worker(gpu, ngpus_per_node, args):
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
     # optionally resume optimizer and meta information from a checkpoint
-    if args.resume:
-        if os.path.isfile(args.resume):
-            if args.gpu is None:
-                checkpoint = torch.load(args.resume)
-            else:
-                # Map model to be loaded to specified single gpu.
-                loc = 'cuda:{}'.format(args.gpu)
-                checkpoint = torch.load(args.resume, map_location=loc)
-            args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
-            if args.gpu is not None:
-                # best_acc1 may be from a checkpoint from a different GPU
-                best_acc1 = best_acc1.to(args.gpu)
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            logging.info("=> loaded optimizer and meta information from checkpoint '{}' (epoch {})".
-                         format(args.resume, checkpoint['epoch']))
-        else:
-            logging.info("=> no checkpoint found at '{}'".format(args.resume))
+    # if args.resume:
+    #     if os.path.isfile(args.resume):
+    #         if args.gpu is None:
+    #             checkpoint = torch.load(args.resume)
+    #         else:
+    #             # Map model to be loaded to specified single gpu.
+    #             loc = 'cuda:{}'.format(args.gpu)
+    #             checkpoint = torch.load(args.resume, map_location=loc)
+    #         args.start_epoch = checkpoint['epoch']
+    #         best_acc1 = checkpoint['best_acc1']
+    #         if args.gpu is not None:
+    #             # best_acc1 may be from a checkpoint from a different GPU
+    #             best_acc1 = best_acc1.to(args.gpu)
+    #         optimizer.load_state_dict(checkpoint['optimizer'])
+    #         logging.info("=> loaded optimizer and meta information from checkpoint '{}' (epoch {})".
+    #                      format(args.resume, checkpoint['epoch']))
+    #     else:
+    #         logging.info("=> no checkpoint found at '{}'".format(args.resume))
 
     cudnn.benchmark = True
 
@@ -481,11 +478,18 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         if i % args.print_freq == 0:
             progress.display(i)
             if args.wandb:
-                wandb.log({
+                to_log = {
                     "train_loss": loss.item(), 
                     "train_acc1": acc1[0], 
                     "train_acc5": acc5[0]
-                })
+                }
+
+                scales = model.get_scales(dyadic=True)
+                for i, scale in enumerate(scales):
+                    to_log[f"train_quant/align_{i}"] = scale[0]
+                    to_log[f"train_quant/scale_{i}"] = scale[1]
+                wandb.log(to_log)
+
 
 
 def train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_loader, args, ngpus_per_node,
@@ -551,11 +555,16 @@ def train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_load
             print('Epoch {epoch_} [{iters}]  Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(epoch_=epoch, iters=i,
                                                                                                top1=top1, top5=top5))
             if args.wandb:
-                wandb.log({
+                to_log = {
                     "train_loss": loss.item(), 
                     "train_acc1": acc1[0], 
                     "train_acc5": acc5[0]
-                })
+                }
+
+                scales = model.get_scales()
+                for i, scale in enumerate(scales):
+                    to_log[f"train_quant/scale_{i}"] = scale
+                wandb.log(to_log)
 
         if i % ((dataset_length // (
                 args.batch_size * args.evaluate_times)) + 2) == 0 and i > 0 and args.evaluate_times > 0:
@@ -584,6 +593,7 @@ def train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_load
                     'best_acc1': best_acc1,
                     'optimizer': optimizer.state_dict(),
                 }, is_best, args.save_path)
+                print(model.state_dict())
 
 
 def validate(val_loader, model, criterion, args):
@@ -627,15 +637,25 @@ def validate(val_loader, model, criterion, args):
         logging.info(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
 
     if args.wandb:
-        wandb.log({
-            "test_avg_loss": losses.avg, 
-            "test_avg_acc1": top1.avg, 
-            "test_avg_acc5": top5.avg
-        })
+        to_log = {
+            "evaluation/test_avg_loss": losses.avg, 
+            "evaluation/test_avg_acc1": top1.avg, 
+            "evaluation/test_avg_acc5": top5.avg,
+        }
+        
+        scales = model.get_scales()
+        for i, scale in enumerate(scales):
+            to_log[f"eval_quant/scale_{i}"] = scale
+        
+        wandb.log(to_log)
 
-    torch.save({'a_s': {k: v for k, v in model.state_dict().items() if 'a_s' in k},
+    torch.save({'observer.scale': {k: v for k, v in model.state_dict().items() if 'observer.scale' in k},
                 'w_int': {k: v for k, v in model.state_dict().items() if 'w_int' in k},
                 'b_int': {k: v for k, v in model.state_dict().items() if 'b_int' in k},
+                'mult': {k: v for k, v in model.state_dict().items() if 'mult' in k},
+                'shift': {k: v for k, v in model.state_dict().items() if 'shift' in k},
+                'res_mult': {k: v for k, v in model.state_dict().items() if 'res_mult' in k},
+                'res_shift': {k: v for k, v in model.state_dict().items() if 'res_shift' in k},
                 }, args.save_path + 'quantized_checkpoint.pth.tar')
 
                 
