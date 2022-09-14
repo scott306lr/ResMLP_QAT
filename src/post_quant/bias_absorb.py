@@ -21,7 +21,7 @@ def ba_for_resmlp(model):
     model_layers = []
     for i in range(0, 24):
         todo_layer = model.blocks[i]
-        model_layers.append(get_linear_layers(todo_layer, f'{i}-')[3:6]) # cross-channel sublayer only
+        model_layers.append(get_linear_layers(todo_layer, prefix=f'{i}-')[3:6]) # cross-channel sublayer only
     layers_dist = find_layer_dist(model, model_layers)
 
     for i in range(0, 24):

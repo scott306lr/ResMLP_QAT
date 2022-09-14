@@ -132,7 +132,7 @@ def getTestData(dataset='imagenet',
 
 def getTrainData(dataset='imagenet',
                 batch_size=512,
-                path='data/imagenet',
+                path='/mnt/disk1/imagenet',
                 for_inception=False,
                 data_percentage=0.1):
     """
@@ -144,7 +144,7 @@ def getTrainData(dataset='imagenet',
     """
     if dataset == 'imagenet':
         input_size = 299 if for_inception else 224
-        traindir = path + 'train'
+        traindir = os.path.join(path, 'train')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -158,7 +158,7 @@ def getTrainData(dataset='imagenet',
             ]))
 
         dataset_length = int(len(train_dataset) * data_percentage)
-        partial_train_dataset, _ = torch.utils.data.random_split(train_dataset, [dataset_length, len(train_dataset)-dataset_length])
+        partial_train_dataset, _ = torch.utils.data.random_split(train_dataset, [dataset_length, len(train_dataset)-dataset_length], generator=torch.Generator().manual_seed(0))
 
         train_loader = torch.utils.data.DataLoader(
             partial_train_dataset, batch_size=batch_size, shuffle=True,
