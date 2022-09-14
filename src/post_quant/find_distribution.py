@@ -1,6 +1,6 @@
 import torch
 from .utils import HookHandler
-from ..utils.data_utils import *
+from ..data_utils import *
 
 class StdMean(object):
     def __init__(self, std=0, mean=0):

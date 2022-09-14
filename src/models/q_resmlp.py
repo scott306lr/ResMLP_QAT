@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import copy
 
-from ..quantization_utils.quant_modules import *
+from ..quantization.quant_modules import *
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
@@ -140,7 +140,7 @@ class QLayer_Block(nn.Module):
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
-RES_RESCALE_BIT = 16
+RES_RESCALE_BIT = 14
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.

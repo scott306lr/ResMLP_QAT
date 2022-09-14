@@ -6,98 +6,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 from torch.nn import Module, Parameter
-from .quant_utils import *
-
-class MinMaxObserver(nn.Module):
-    def __init__(self, num_bits, remember_old=True):
-        super(MinMaxObserver, self).__init__()
-        self.num_bits = num_bits
-        self.remember_old = remember_old
-        self.register_buffer('min_val', torch.tensor([float("inf")], requires_grad=False))
-        self.register_buffer('max_val', torch.tensor([float("-inf")], requires_grad=False))
-        self.register_buffer('scale', torch.zeros(1, requires_grad=False))
-
-    def get_min_max(self):
-        return self.min_val, self.max_val
-
-    def get_scale(self):
-        return self.scale
-
-    def calc_quant_scale(self):
-        sat_val = torch.max(self.min_val.abs(), self.max_val.abs())
-        
-        n = signed_max_bits(self.num_bits)
-        # If float values are all 0, we just want the quantized values to be 0 as well. So overriding the saturation
-        # value to 'n', so the scale becomes 1
-        if sat_val == 0 : 
-            sat_val = n 
-
-        scale = torch.clamp(sat_val, min=1e-8) / n
-        return scale
-
-    def forward(self, x_orig):
-        x = x_orig.detach()
-        x = x.to(self.min_val.dtype)
-        min_val, max_val = torch.aminmax(x)
-        min_val, max_val = min_val.unsqueeze(0), max_val.unsqueeze(0)
-        
-        if self.remember_old:
-            min_val = torch.min(min_val, self.min_val)
-            max_val = torch.max(max_val, self.max_val)
-
-        self.min_val.copy_(min_val)
-        self.max_val.copy_(max_val)
-
-        self.scale = self.calc_quant_scale()
-        return self.scale
-
-class MovingAverageMinMaxObserver(nn.Module):
-    def __init__(self, num_bits, remember_old=True, averaging_constant=0.01):
-        super(MovingAverageMinMaxObserver, self).__init__()
-        self.num_bits = num_bits
-        self.remember_old = remember_old
-        self.averaging_constant = averaging_constant
-        self.register_buffer('min_val', torch.tensor([float("inf")], requires_grad=False))
-        self.register_buffer('max_val', torch.tensor([float("-inf")], requires_grad=False))
-        self.register_buffer('scale', torch.zeros(1, requires_grad=False))
-
-    def get_min_max(self):
-        return self.min_val, self.max_val
-
-    def get_scale(self):
-        return self.scale
-
-    def calc_quant_scale(self):
-        sat_val = torch.max(self.min_val.abs(), self.max_val.abs())
-
-        n = signed_max_bits(self.num_bits)
-        # If float values are all 0, we just want the quantized values to be 0 as well. So overriding the saturation
-        # value to 'n', so the scale becomes 1
-        if sat_val == 0 : 
-            sat_val = n 
-
-        scale = torch.clamp(sat_val, min=1e-8) / n
-        return scale
-
-    def forward(self, x_orig): # update the min and max values
-        x = x_orig.detach()
-        x = x.to(self.min_val.dtype)
-        min_val = self.min_val
-        max_val = self.max_val
-
-        if min_val.item() == float("inf") and max_val.item() == float("-inf"):
-            min_val, max_val = torch.aminmax(x)
-            min_val, max_val = min_val.unsqueeze(0), max_val.unsqueeze(0)
-        else:
-            min_val_cur, max_val_cur = torch.aminmax(x)
-            min_val = min_val + self.averaging_constant * (min_val_cur - min_val)
-            max_val = max_val + self.averaging_constant * (max_val_cur - max_val)
-        
-        self.min_val.copy_(min_val)
-        self.max_val.copy_(max_val)
-
-        self.scale = self.calc_quant_scale()
-        return self.scale
+from .utils import *
+from .quantizer.func import *
+from .quantizer.lsq import *
+from .quantizer.observer import *
 
 class QLinear(Module):
     def __init__(self,
@@ -111,9 +23,13 @@ class QLinear(Module):
         self.has_bias = (linear.bias is not None)
         self.weight_bit = weight_bit
         self.bias_bit = bias_bit
+
         self.training = training
         self.regular = regular
-        self.observer = MinMaxObserver(weight_bit, remember_old=True) # seems better to remember_old even for quantizing the weights?
+        #self.observer = MinMaxObserver(weight_bit, remember_old=True) # seems better to remember_old even for quantizing the weights?
+        self.wquantizer = LSQWeight(weight_bit, linear.weight.numel())
+        self.wquantizer.initialize_scale(linear.weight)
+        # self.bquantizer = STEQuantizer(bias_bit, linear.bias.numel()) if self.has_bias else None
         self.set_param(linear)
 
     def __repr__(self):
@@ -148,21 +64,32 @@ class QLinear(Module):
         if self.training:
             if a_s == None: raise ValueError('Should not be None during QAT!')
 
-            # step 1: quantize back the weights
-            x_int8 = input / a_s
+            # # step 1: quantize back the weights
+            # x_int8 = input / a_s
             
-            # step 2: obtain scale to quantize weight/bias
-            w_s = self.observer(self.linear.weight)
-            b_s = a_s * w_s
+            # # step 2: obtain scale to quantize weight/bias
+            # w_s = self.observer(self.linear.weight)
+            # b_s = a_s * w_s
             
-            # step 3: quantize weight/bias
-            self.w_int = LinearQuantizeSTE.apply(self.linear.weight, w_s, self.weight_bit)
-            self.b_int = LinearQuantizeSTE.apply(self.linear.bias, b_s, self.bias_bit) if self.has_bias else None
+            # # step 3: quantize weight/bias
+            # self.w_int = LinearQuantizeSTE.apply(self.linear.weight, w_s, self.weight_bit)
+            # self.b_int = LinearQuantizeSTE.apply(self.linear.bias, b_s, self.bias_bit) if self.has_bias else None
 
-            # step 4: perform linear operation with quantized values
-            out_int32 = F.linear(x_int8, weight=self.w_int, bias=self.b_int) #? Removed RoundSTE.apply() here, I think we don't need it here?
+            #TODO
+            ### step 1: quantize back the weights
+            x_int8 = torch.div(input, a_s)
+            
+            ### step 2: quantize weight/bias and backpropagate gradients for weight/bias, scale
+            self.w_int = self.wquantizer(self.linear.weight)
 
-            # step 5: dequantize output and return
+            b_s = a_s * self.wquantizer.scale
+            # self.b_int = self.bquantizer(self.linear.bias, b_s) if self.has_bias else None
+            self.b_int = STEQuantizer.apply(self.linear.bias, b_s, self.bias_bit) if self.has_bias else None
+
+            # step 3: perform linear operation with quantized values
+            out_int32 = F.linear(x_int8, weight=self.w_int, bias=self.b_int)
+
+            # step 4: dequantize output and return
             return out_int32 * b_s, b_s
 
         # On Validation (inputs are quantized values)
@@ -228,14 +155,14 @@ class QAct(Module):
 
             # step 3: rescale input to int8
             if a_s == None or self.from_fp32: # "a_s == None" means to rescale fp32 directly using org_scale, used only on the first input layer
-                x_int8 = LinearQuantizeSTE.apply(input_int32, org_scale, self.to_bit)
+                x_int8 = STEQuantizer.apply(input_int32, org_scale, self.to_bit)
             
             else: 
                 # find real scale from org_scale to directly rescale int32 down to int8 (approximated with Dyadic Number)
                 scale = (a_s.type(torch.double) / org_scale.type(torch.double)).type(torch.float)
                 self.mult, self.shift = get_scale_approx(scale, self.mult_bit)
                 
-                x_int8 = DyadicQuantizeSTE.apply(input_int32, self.mult, self.shift, self.to_bit, scale)
+                x_int8 = DyadicSTEQuantizer.apply(input_int32, self.mult, self.shift, self.to_bit, scale)
 
             return x_int8 * org_scale, org_scale
         
@@ -248,10 +175,10 @@ class QAct(Module):
                 
                 if self.from_fp32:
                     scale = self.observer.get_scale()
-                    return LinearQuantizeSTE.apply(input, scale, self.to_bit), None
+                    return STEQuantizer.apply(input, scale, self.to_bit), None
                 else:
                     # return torch.bitwise_right_shift(input.type(torch.int64) * self.mult.int(), self.shift.int()).type(torch.float), None
-                    return DyadicQuantizeSTE.apply(input, self.mult, self.shift, self.to_bit), None
+                    return DyadicSTEQuantizer.apply(input, self.mult, self.shift, self.to_bit), None
 
 
 class QResAct(Module):
@@ -304,12 +231,12 @@ class QResAct(Module):
             if self.training:
                 sum = input + res_fp
                 scale = self.observer(sum)
-                sum_int8 = LinearQuantizeSTE.apply(sum, scale, self.to_bit)
+                sum_int8 = STEQuantizer.apply(sum, scale, self.to_bit)
                 return sum_int8 * scale, scale
             else:
                 sum = input + res_fp
                 scale = self.observer.get_scale()
-                sum_int8 = LinearQuantizeSTE.apply(sum, scale, self.to_bit)
+                sum_int8 = STEQuantizer.apply(sum, scale, self.to_bit)
                 return sum * scale, scale
             
         if self.training:
@@ -329,9 +256,9 @@ class QResAct(Module):
             self.mult, self.shift = get_scale_approx(scale, self.mult_bit)
 
             # step 4: rescale residual input down, add up inputs, then rescale again
-            res_x_int32 = DyadicQuantizeSTE.apply(res_x_int8, self.res_mult, self.res_shift, self.to_bit, scale0)
+            res_x_int32 = DyadicSTEQuantizer.apply(res_x_int8, self.res_mult, self.res_shift, self.to_bit, scale0)
             mix_int32 = x_int32 + res_x_int32
-            out_int8 = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit, scale)
+            out_int8 = DyadicSTEQuantizer.apply(mix_int32, self.mult, self.shift, self.to_bit, scale)
 
             return out_int8*org_scale, org_scale
 
@@ -340,12 +267,10 @@ class QResAct(Module):
             if a_s != None or res_a_s != None : raise ValueError('Should not have value during Validation!')
 
             with torch.no_grad():
-                res_x_int32 = DyadicQuantizeSTE.apply(res_fp, self.res_mult, self.res_shift, self.to_bit)
+                res_x_int32 = DyadicSTEQuantizer.apply(res_fp, self.res_mult, self.res_shift, self.to_bit)
                 mix_int32 = input + res_x_int32
-                out = DyadicQuantizeSTE.apply(mix_int32, self.mult, self.shift, self.to_bit)
-                # res_x_int32 = torch.bitwise_right_shift(res_fp.type(torch.int64) * self.res_mult.int(), self.res_shift.int())
-                # mix_int32 = input.type(torch.int64) + res_x_int32
-                # out = torch.bitwise_right_shift(mix_int32 * self.mult.int(), self.shift.int()).type(torch.float)
+                out = DyadicSTEQuantizer.apply(mix_int32, self.mult, self.shift, self.to_bit)
+
                 if self.to_fp32:
                     scale = self.observer.get_scale()
                     return out * scale, scale
@@ -367,7 +292,11 @@ class QConv2d(Module):
         self.bias_bit = bias_bit
         self.training = training
         self.regular = regular
-        self.observer = MovingAverageMinMaxObserver(weight_bit)
+        # self.observer = MovingAverageMinMaxObserver(weight_bit)
+
+        self.wquantizer = LSQWeight(weight_bit, conv.weight.numel())
+        self.wquantizer.initialize_scale(conv.weight)
+        # self.bquantizer = STEQuantizer(bias_bit, linear.bias.numel()) if self.has_bias else None
         self.set_param(conv)
         
     def __repr__(self):
@@ -400,21 +329,38 @@ class QConv2d(Module):
         if self.training:
             if a_s == None: raise ValueError('Should not be None during QAT!')
 
-            # step 1: quantize back the weights
-            x_int8 = input / a_s
+            # # step 1: quantize back the weights
+            # x_int8 = input / a_s
             
-            # step 2: obtain scale to quantize weight/bias
-            w_s = self.observer(self.conv.weight)
-            b_s = a_s * w_s
+            # # step 2: obtain scale to quantize weight/bias
+            # w_s = self.observer(self.conv.weight)
+            # b_s = a_s * w_s
             
-            # step 3: quantize weight/bias
-            self.w_int = LinearQuantizeSTE.apply(self.conv.weight, w_s, self.weight_bit)
-            self.b_int = LinearQuantizeSTE.apply(self.conv.bias, b_s, self.bias_bit) if self.has_bias else None
+            # # step 3: quantize weight/bias
+            # self.w_int = STEQuantizer.apply(self.conv.weight, w_s, self.weight_bit)
+            # self.b_int = STEQuantizer.apply(self.conv.bias, b_s, self.bias_bit) if self.has_bias else None
 
-            # step 4: perform conv operation with quantized values
+            # # step 4: perform conv operation with quantized values
+            # out_int32 = F.conv2d(x_int8, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups)
+
+            # # step 5: dequantize output and return
+            # return out_int32 * b_s, b_s
+
+            #TODO
+            ### step 1: quantize back the weights
+            x_int8 = torch.div(input, a_s)
+            
+            ### step 2: quantize weight/bias and backpropagate gradients for weight/bias, scale
+            self.w_int = self.wquantizer(self.conv.weight)
+
+            b_s = a_s * self.wquantizer.scale
+            # self.b_int = self.bquantizer(self.linear.bias, b_s) if self.has_bias else None
+            self.b_int = STEQuantizer.apply(self.conv.bias, b_s, self.bias_bit) if self.has_bias else None
+
+            # step 3: perform linear operation with quantized values
             out_int32 = F.conv2d(x_int8, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups)
 
-            # step 5: dequantize output and return
+            # step 4: dequantize output and return
             return out_int32 * b_s, b_s
 
         # On Validation (inputs are quantized values)
@@ -429,35 +375,3 @@ def set_training(model, set=True):
         if type(m) in [QLinear, QAct, QResAct, QConv2d]:
             m.set_training(set)
             # print(n)
-            
-
-
-                
-# class QFP(Module):
-#     def __init__(self,
-#                  training=True,
-#                  regular=False,
-#                  ):
-#         super(QFP, self).__init__()
-#         self.training = training
-#         self.regular = regular
-
-#     def __repr__(self):
-#         s = super(QAct, self).__repr__()
-#         s = f"({s} training={self.training}, regular={self.regular})"
-#         return s
-
-#     def set_training(self, set=True):
-#         self.training = set
-
-#     def forward(self, input, a_s=None):
-#         if self.regular:
-#             return input, None
-        
-#         if (not self.regular) or self.training:
-#             if a_s == None: raise ValueError('Should have value during Training!')
-#             return input / a_s, None
-        
-#         else: #input: int8 instead
-#             if a_s != None: raise ValueError('Should not have value during Validation!')
-#             return input, None

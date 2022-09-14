@@ -9,7 +9,7 @@ import logging
 import warnings
 
 import torch
-# torch.manual_seed(0) # FIX random sampler on training data
+torch.manual_seed(0) # FIX random sampler on training data
 
 import torch.nn as nn
 import torch.nn.parallel
@@ -21,8 +21,11 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from src.utils import *
+
+from src.data_utils import AverageMeter, ProgressMeter
+from src.quantization.quant_modules import set_training
 from src.post_quant.cle import cle_for_resmlp
+from src.models import *
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--data', metavar='DIR',
@@ -304,27 +307,6 @@ def main_worker(gpu, ngpus_per_node, args):
                                 weight_decay=args.weight_decay)
     
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
-
-    # optionally resume optimizer and meta information from a checkpoint
-    # if args.resume:
-    #     if os.path.isfile(args.resume):
-    #         if args.gpu is None:
-    #             checkpoint = torch.load(args.resume)
-    #         else:
-    #             # Map model to be loaded to specified single gpu.
-    #             loc = 'cuda:{}'.format(args.gpu)
-    #             checkpoint = torch.load(args.resume, map_location=loc)
-    #         args.start_epoch = checkpoint['epoch']
-    #         best_acc1 = checkpoint['best_acc1']
-    #         if args.gpu is not None:
-    #             # best_acc1 may be from a checkpoint from a different GPU
-    #             best_acc1 = best_acc1.to(args.gpu)
-    #         optimizer.load_state_dict(checkpoint['optimizer'])
-    #         logging.info("=> loaded optimizer and meta information from checkpoint '{}' (epoch {})".
-    #                      format(args.resume, checkpoint['epoch']))
-    #     else:
-    #         logging.info("=> no checkpoint found at '{}'".format(args.resume))
-
     cudnn.benchmark = True
 
     # Data loading code
@@ -484,10 +466,10 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
                     "train_acc5": acc5[0]
                 }
 
-                scales = model.get_scales(dyadic=True)
-                for i, scale in enumerate(scales):
-                    to_log[f"train_quant/align_{i}"] = scale[0]
-                    to_log[f"train_quant/scale_{i}"] = scale[1]
+                # scales = model.get_scales(dyadic=True)
+                # for i, scale in enumerate(scales):
+                #     to_log[f"train_quant/align_{i}"] = scale[0]
+                #     to_log[f"train_quant/scale_{i}"] = scale[1]
                 wandb.log(to_log)
 
 

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from ..utils.quantization_utils.quant_modules import QLinear
+from ..quantization.quant_modules import QLinear
 
 def get_linear_layers(model, specify_names=None, prefix=""):
     linear_layers = []
