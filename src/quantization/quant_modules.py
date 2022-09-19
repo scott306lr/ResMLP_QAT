@@ -26,7 +26,7 @@ class QLinear(Module):
 
         self.training = training
         self.regular = regular
-        self.wquantizer = LSQWeight(weight_bit)
+        self.quantizer = LSQWeight(weight_bit)
         # self.bquantizer = STEQuantizer(bias_bit, linear.bias.numel()) if self.has_bias else None
         self.set_param(linear)
 
@@ -49,6 +49,9 @@ class QLinear(Module):
     def set_training(self, set=True):
         self.training = set
 
+    def get_scales(self):
+        return self.quantizer.get_scales()
+
     def forward(self, input, a_s=None):
         # To ensure model is connected correctly
         if self.regular:
@@ -66,11 +69,11 @@ class QLinear(Module):
             x_int8 = torch.div(input, a_s)
             
             ### step 2: quantize weight/bias and backpropagate gradients for weight/bias, scale
-            self.w_int = self.wquantizer(self.linear.weight)
+            self.w_int, _ = self.quantizer(self.linear.weight)
 
-            b_s = a_s * self.wquantizer.scale
+            b_s = a_s * self.quantizer.scale
             # self.b_int = self.bquantizer(self.linear.bias, b_s) if self.has_bias else None
-            self.b_int = STEQuantizer.apply(self.linear.bias, b_s, self.bias_bit) if self.has_bias else None
+            self.b_int = STEQuantizer.apply(self.linear.bias, b_s, self.bias_bit, False)[0] if self.has_bias else None
 
             # step 3: perform linear operation with quantized values
             out_int32 = F.linear(x_int8, weight=self.w_int, bias=self.b_int)
@@ -93,7 +96,7 @@ class QInput(Module): # fp
         self.to_bit = to_bit
         self.training = training
         self.regular = regular
-        self.quantizer = LSQAct(to_bit)
+        self.quantizer = LSQAct(to_bit, dyadic=False)
 
     def __repr__(self):
         s = super(QInput, self).__repr__()
@@ -103,19 +106,21 @@ class QInput(Module): # fp
     def set_training(self, set=True):
         self.training = set
     
-    def get_scale(self, dyadic=False):
-        return [self.quantizer.scale]
+    def get_scales(self):
+        return self.quantizer.get_scales()
 
-    def forward(self, input, a_s=None):
+    def forward(self, x, a_s=None):
         # To ensure model is connected correctly
         if self.regular:
-            return input, None
+            return x, None
         
         # On Training (inputs are dequantized values with its scale to quantize back)
         if self.training:
+            if self.quantizer.scale.item() == float("inf"):
+                self.quantizer.initialize_scale(x)
+
+            x_int8, _ = self.quantizer(x, None)
             org_scale = self.quantizer.scale
-            x_int8 = self.quantizer(input)
-            
             return x_int8 * org_scale, org_scale
         
         # On Validation (inputs are quantized values)
@@ -123,7 +128,8 @@ class QInput(Module): # fp
             if a_s != None: raise ValueError('Should not have value during Validation!')
             
             with torch.no_grad():
-                return self.quantizer(input), None
+                out_int8 = linear_quantize(x, self.quantizer.scale, self.to_bit)
+                return out_int8, None
 
 class QAct(Module):
     def __init__(self,
@@ -137,8 +143,10 @@ class QAct(Module):
         self.mult_bit = mult_bit
         self.training = training
         self.regular = regular
-        # self.quantizer = DyadicLSQAct(to_bit, mult_bit)
-        self.quantizer = LSQAct(to_bit)
+        self.quantizer = LSQAct(to_bit, dyadic=False)
+        # self.register_buffer('mult', torch.ones(1, requires_grad=False))
+        # self.register_buffer('shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('s', torch.ones(1, requires_grad=False))
 
     def __repr__(self):
         s = super(QAct, self).__repr__()
@@ -148,19 +156,22 @@ class QAct(Module):
     def set_training(self, set=True):
         self.training = set
     
-    def get_scale(self):
-        return self.quantizer.get_scale()
+    def get_scales(self):
+        return self.quantizer.get_scales()
 
-    def forward(self, input, a_s=None):
+    def forward(self, x, a_s=None):
         # To ensure model is connected correctly
         if self.regular:
-            return input, None
+            return x, None
         
         # On Training (inputs are dequantized values with its scale to quantize back)
         if self.training:
-            # step 1: quantize back the input if there is
+            if self.quantizer.scale.item() == float("inf"):
+                self.quantizer.initialize_scale(x)
+            
+            # x_int8, (self.mult, self.shift) = self.quantizer(x/a_s, a_s)
+            x_int8, self.s = self.quantizer(x/a_s, a_s)
             org_scale = self.quantizer.scale
-            x_int8 = self.quantizer(input, a_s)
 
             return x_int8 * org_scale, org_scale
         
@@ -169,8 +180,8 @@ class QAct(Module):
             if a_s != None: raise ValueError('Should not have value during Validation!')
             
             with torch.no_grad():
-                # return torch.bitwise_right_shift(input.type(torch.int64) * self.mult.int(), self.shift.int()).type(torch.float), None
-                return self.quantizer(input, None), None
+                out_int8 = dyadic_quant(x, self.mult, self.shift, self.to_bit)
+                return out_int8, None
 
 
 class QResAct(Module):
@@ -186,7 +197,13 @@ class QResAct(Module):
         self.training = training
         self.regular = regular
         # self.quantizer = DyadicLSQResAct(to_bit, mult_bit)
-        self.quantizer = LSQResAct(to_bit)
+        self.quantizer = LSQAct(to_bit, dyadic=False)
+        self.register_buffer('res_mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('res_shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('res_s', torch.ones(1, requires_grad=False))
+        self.register_buffer('s', torch.ones(1, requires_grad=False))
 
     def __repr__(self):
         s = super(QResAct, self).__repr__()
@@ -196,34 +213,39 @@ class QResAct(Module):
     def set_training(self, set=True):
         self.training = set
     
-    def get_scale(self, dyadic=False):
-        if dyadic:
-            # return [(self.res_mult, self.res_shift), (self.mult, self.shift)]
-            align = (self.res_mult[0].type(torch.double) / (2.0 ** self.res_shift[0]).type(torch.double)).type(torch.float)
-            scale = (self.mult[0].type(torch.double) / (2.0 ** self.shift[0]).type(torch.double)).type(torch.float)
-            return [(align, scale)]
-        else:
-            return [self.observer.scale]
+    def get_scales(self):
+        res_scale = [dyadic_to_scale(self.res_mult, self.res_shift)]
+        return res_scale + self.quantizer.get_scales()
 
-    def forward(self, input, a_s=None, res_fp=None, res_a_s=None):
+    def forward(self, x, a_s=None, res_x=None, res_a_s=None):
         # To ensure model is connected correctly
         if self.regular:
-            return input + res_fp, None
+            return x + res_x, None
 
         if self.training:
             if a_s == None or res_a_s == None : raise ValueError('Should not be None during QAT!')
 
+
+            # res_int, (self.res_mult, self.res_shift) = STEQuantizer.apply(res_x/res_a_s, a_s/res_a_s, self.to_bit, True)
+            res_int, self.res_s = STEQuantizer.apply(res_x/res_a_s, a_s/res_a_s, self.to_bit, False)
+            x_int   = x/a_s
+            mix_int = x_int + res_int
+            
+            if self.quantizer.scale.item() == float("inf"):
+                self.quantizer.initialize_scale(x + res_x)
+            # out_int, (self.mult, self.shift) = self.quantizer(mix_int, a_s)
+            out_int, self.s = self.quantizer(mix_int, a_s)
             org_scale = self.quantizer.scale
-            out_int8 = self.quantizer(input, a_s, res_fp, res_a_s)
+            return out_int*org_scale, org_scale
 
-            return out_int8*org_scale, org_scale
-
-        # On Validation (inputs are quantized values)
+        # On Inference (inputs are already quantized integer values)
         else:
             if a_s != None or res_a_s != None : raise ValueError('Should not have value during Validation!')
-
             with torch.no_grad():
-                return self.quantizer(input, a_s, res_fp, res_a_s), None
+                res_int = dyadic_quant(res_x, self.res_mult, self.res_shift, self.to_bit)
+                mix_int = x_int + res_int
+                out_int8 = dyadic_quant(mix_int, self.mult, self.shift, self.to_bit)
+                return out_int8, None
 
 class QResOutput(Module):
     def __init__(self,
@@ -238,7 +260,13 @@ class QResOutput(Module):
         self.training = training
         self.regular = regular
         # self.quantizer = DyadicLSQResAct(to_bit, mult_bit)
-        self.quantizer = LSQResAct(to_bit)
+        self.quantizer = LSQAct(to_bit, False)
+        self.register_buffer('res_mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('res_shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('res_s', torch.ones(1, requires_grad=False))
+        self.register_buffer('s', torch.ones(1, requires_grad=False))
 
     def __repr__(self):
         s = super(QResAct, self).__repr__()
@@ -248,35 +276,38 @@ class QResOutput(Module):
     def set_training(self, set=True):
         self.training = set
     
-    def get_scale(self, dyadic=False):
-        if dyadic:
-            # return [(self.res_mult, self.res_shift), (self.mult, self.shift)]
-            align = (self.res_mult[0].type(torch.double) / (2.0 ** self.res_shift[0]).type(torch.double)).type(torch.float)
-            scale = (self.mult[0].type(torch.double) / (2.0 ** self.shift[0]).type(torch.double)).type(torch.float)
-            return [(align, scale)]
-        else:
-            return [self.observer.scale]
+    def get_scales(self):
+        return self.quantizer.get_scales()
 
-    def forward(self, input, a_s=None, res_fp=None, res_a_s=None):
+    def forward(self, x, a_s=None, res_x=None, res_a_s=None):
         # To ensure model is connected correctly
         if self.regular:
-            return input + res_fp, None
+            return x + res_x, None
 
         if self.training:
             if a_s == None or res_a_s == None : raise ValueError('Should not be None during QAT!')
 
+            # res_int, (self.res_mult, self.res_shift) = STEQuantizer.apply(res_x/res_a_s, a_s/res_a_s, self.to_bit, True)
+            res_int, self.res_s = STEQuantizer.apply(res_x/res_a_s, a_s/res_a_s, self.to_bit, False)
+            x_int   = x/a_s
+            mix_int = x_int + res_int
+
+            if self.quantizer.scale.item() == float("inf"):
+                self.quantizer.initialize_scale(x + res_x)
+            # out_int, (self.mult, self.shift) = self.quantizer(mix_int, a_s)
+            out_int, self.s = self.quantizer(mix_int, a_s)
             org_scale = self.quantizer.scale
-            out_int8 = self.quantizer(input, a_s, res_fp, res_a_s)
+            return out_int*org_scale, org_scale
 
-            return out_int8*org_scale, org_scale
-
-        # On Validation (inputs are quantized values)
+        # On Inference (inputs are already quantized integer values)
         else:
             if a_s != None or res_a_s != None : raise ValueError('Should not have value during Validation!')
-
             with torch.no_grad():
+                res_int = dyadic_quant(res_x, self.res_mult, self.res_shift, self.to_bit)
+                mix_int = x_int + res_int
+                out_int8 = dyadic_quant(mix_int, self.mult, self.shift, self.to_bit)
                 org_scale = self.quantizer.scale
-                return self.quantizer(input, a_s, res_fp, res_a_s)*org_scale, None
+                return out_int8 * org_scale, None
 
 #! Not used, hasn't correctly implemented yet
 class QConv2d(Module):
@@ -295,7 +326,7 @@ class QConv2d(Module):
         self.regular = regular
         # self.observer = MovingAverageMinMaxObserver(weight_bit)
 
-        self.wquantizer = LSQWeight(weight_bit)
+        self.quantizer = LSQWeight(weight_bit)
         # self.bquantizer = STEQuantizer(bias_bit, linear.bias.numel()) if self.has_bias else None
         self.set_param(conv)
         
@@ -315,6 +346,9 @@ class QConv2d(Module):
 
     def set_training(self, set=True):
         self.training = set
+    
+    def get_scales(self):
+        return self.quantizer.get_scales()
 
     def forward(self, input, a_s=None):
         if self.regular:
@@ -332,11 +366,11 @@ class QConv2d(Module):
             x_int8 = torch.div(input, a_s)
             
             ### step 2: quantize weight/bias and backpropagate gradients for weight/bias, scale
-            self.w_int = self.wquantizer(self.conv.weight)
+            self.w_int, _ = self.quantizer(self.conv.weight)
 
-            b_s = a_s * self.wquantizer.scale
+            b_s = a_s * self.quantizer.scale
             # self.b_int = self.bquantizer(self.linear.bias, b_s) if self.has_bias else None
-            self.b_int = STEQuantizer.apply(self.conv.bias, b_s, self.bias_bit) if self.has_bias else None
+            self.b_int = STEQuantizer.apply(self.conv.bias, b_s, self.bias_bit, False)[0] if self.has_bias else None
 
             # step 3: perform linear operation with quantized values
             out_int32 = F.conv2d(x_int8, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups)

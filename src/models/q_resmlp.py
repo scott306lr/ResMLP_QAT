@@ -21,7 +21,7 @@ class QPatchEmbed(nn.Module):
     
     def get_scales(self):
         scales = []
-        scales += self.act.get_scale()
+        scales.append(self.act.get_scales())
         return scales
 
     def forward(self, x, a_s=None):
@@ -45,10 +45,10 @@ class Q_Mlp(nn.Module):
         self.fc2 = QLinear(mlp.fc2)
         self.act2 = QAct()
     
-    def get_scales(self, dyadic=False):
+    def get_scales(self):
         scales = []
-        scales += self.act1.get_scale(dyadic)
-        scales += self.act2.get_scale(dyadic)
+        scales += self.act1.get_scales()
+        scales += self.act2.get_scales()
         return scales
     
     def forward(self, x, a_s=None):
@@ -93,10 +93,10 @@ class QLayer_Block(nn.Module):
         scales = []
         # scales += self.act1.get_scale(dyadic)
         # scales += self.act2.get_scale(dyadic)
-        scales += self.add_1.get_scale()
+        scales += self.add_1.get_scales()
         # scales += self.act3.get_scale(dyadic)
         # scales += self.mlp.get_scales(dyadic)
-        scales += self.add_2.get_scale()
+        scales += self.add_2.get_scales()
         
         return scales
    
@@ -129,26 +129,26 @@ class QLayer_Block(nn.Module):
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
-RES_RESCALE_BIT = 14
+RES_RESCALE_BIT = 16
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.
     """
     def __init__(self, model):
         super().__init__()
-        self.quant_input = QInput(to_bit=8)
+        self.quant_input = QInput(to_bit=RES_RESCALE_BIT)
         self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=RES_RESCALE_BIT)
         self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
         self.norm = model.norm#QLinear(model.norm) #model.norm
         self.head = model.head#QLinear(getattr(model, 'head'))
 
-    def get_scales(self, dyadic=False):
+    def get_scales(self):
         scales = []
         # scales += self.quant_patch.get_scales()
 
         for i, blk in enumerate(self.blocks):
             # if i >= ALL_FP_LAYER-1 and i <= ALL_FP_LAYER+1 : 
-            scales += blk.get_scales(dyadic=dyadic)
+            scales += blk.get_scales()
 
         return scales
 

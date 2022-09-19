@@ -10,13 +10,17 @@ def unsigned_max_bits(b):
 def signed_max_bits(b):
     return (1 << (b-1)) - 1
 
-def get_scale_approx(fp32_scale: torch.Tensor, mult_bits, limit_bits=False):
+def scale_to_dyadic(fp32_scale: torch.Tensor, mult_bits: int, limit_bits=False):
     m, e = torch.frexp(fp32_scale)
-    m = torch.round(m * signed_max_bits(mult_bits+1)) # unsigned has 1 bit more space than signed
+    m = torch.round(m * unsigned_max_bits(mult_bits)) # unsigned has 1 bit more space than signed
     new_e = mult_bits - e.type(torch.float) # right shift instead of left
 
     if (new_e < 0) : raise ValueError(f'Shift value is negative! e: {new_e}, org_e: {-e}')
-    return m, new_e
+    return (m, new_e)
+
+def dyadic_to_scale(mult: torch.Tensor, shift: torch.Tensor):
+    scale = (mult.type(torch.double) / (2.0 ** shift).type(torch.double)).type(torch.float)
+    return scale
 
 class RoundSTE(torch.autograd.Function):
     @staticmethod

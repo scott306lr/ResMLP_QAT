@@ -1,6 +1,6 @@
 import torch
 
-from ..utils.quantization_utils.quant_utils import signed_max_bits
+from ..quantization.utils import signed_max_bits
 from .utils import HookHandler
 from ..data_utils import *
 

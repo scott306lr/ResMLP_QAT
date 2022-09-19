@@ -466,10 +466,10 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
                     "train_acc5": acc5[0]
                 }
 
-                # scales = model.get_scales(dyadic=True)
-                # for i, scale in enumerate(scales):
-                #     to_log[f"train_quant/align_{i}"] = scale[0]
-                #     to_log[f"train_quant/scale_{i}"] = scale[1]
+                scales = model.get_scales()
+                for i, scale in enumerate(scales):
+                    # to_log[f"train_quant/align_{i}"] = scale[0]
+                    to_log[f"train_quant/scale_{i}"] = scale.item()
                 wandb.log(to_log)
 
 
@@ -625,9 +625,9 @@ def validate(val_loader, model, criterion, args):
             "evaluation/test_avg_acc5": top5.avg,
         }
         
-        scales = model.get_scales()
-        for i, scale in enumerate(scales):
-            to_log[f"eval_quant/scale_{i}"] = scale
+        # scales = model.get_scales()
+        # for i, scale in enumerate(scales):
+        #     to_log[f"eval_quant/scale_{i}"] = scale
         
         wandb.log(to_log)
 
