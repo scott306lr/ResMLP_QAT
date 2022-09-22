@@ -8,7 +8,7 @@ from ..utils import signed_max_bits, scale_to_dyadic, dyadic_to_scale
 
 class LSQFun(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, a_s, g, num_bits, dyadic):
+    def forward(ctx, x, a_s, num_bits, dyadic):
         # assert scale > 0, 'scale = {}'.format(scale)
         if dyadic:
             mult, shift = scale_to_dyadic(1 / a_s, num_bits)
@@ -22,7 +22,7 @@ class LSQFun(torch.autograd.Function):
         x_round = torch.round(x_clamp)
 
         ctx.save_for_backward(x_scale, a_s)
-        ctx.other = g, -n, n
+        ctx.other = x.numel(), -n, n
 
         if dyadic:
             return x_round, (mult, shift)
@@ -31,7 +31,7 @@ class LSQFun(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output, grad_s):
         x_scale, a_s = ctx.saved_tensors
-        g, Qn, Qp = ctx.other
+        x_num, Qn, Qp = ctx.other
         ind_under = (x_scale <= Qn).float()
         ind_over  = (x_scale >= Qp).float()
         ind_mid = 1.0 - ind_under - ind_over
@@ -41,6 +41,7 @@ class LSQFun(torch.autograd.Function):
 
         # gradient for scale
         grad = (ind_under * Qn + ind_over * Qp + ind_mid * (-x_scale + torch.round(x_scale)))
+        g = 1.0/math.sqrt(x_num * Qp)
         step_size = grad_output * g
         grad_scale = grad * step_size
 
@@ -71,8 +72,7 @@ class LSQWeight(nn.Module):
                 # print("Weight: ", init_scale)
                 self.scale.copy_(init_scale.unsqueeze(0))
 
-        g = 1.0/math.sqrt(x.numel() * self.Qp)
-        return LSQFun.apply(x, self.scale, g, self.num_bits, False)
+        return LSQFun.apply(x, self.scale, self.num_bits, False)
 
 class LSQAct(nn.Module):
     def __init__(self, rescale_bits, dyadic=False):
@@ -95,14 +95,9 @@ class LSQAct(nn.Module):
             self.scale.copy_(init_scale.unsqueeze(0))
 
     def forward(self, x, a_s=None):
-        # if self.scale.item() == float("inf"):
-        #     self.initialize_scale(x)
-        
-        g = 1.0/math.sqrt(x.numel() * self.Qp)
-
         if a_s is None:
-            return LSQFun.apply(x, self.scale, g, self.rescale_bits, self.dyadic)
-        return LSQFun.apply(x, self.scale/a_s, g, self.rescale_bits, self.dyadic)
+            return LSQFun.apply(x, self.scale, self.rescale_bits, self.dyadic)
+        return LSQFun.apply(x, self.scale/a_s, self.rescale_bits, self.dyadic)
 
 # class LSQResAct(nn.Module):
 #     def __init__(self, rescale_bits, scale_init=None):

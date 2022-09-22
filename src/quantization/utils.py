@@ -1,14 +1,14 @@
 import torch
-import numpy as np
-import torch.nn as nn
-from torch.nn import Module
-from decimal import Decimal
 
 def unsigned_max_bits(b):
     return (1 << b) - 1
 
 def signed_max_bits(b):
     return (1 << (b-1)) - 1
+
+def signed_minmax(b):
+    n = signed_max_bits(b)
+    return -n, n
 
 def scale_to_dyadic(fp32_scale: torch.Tensor, mult_bits: int, limit_bits=False):
     m, e = torch.frexp(fp32_scale)
