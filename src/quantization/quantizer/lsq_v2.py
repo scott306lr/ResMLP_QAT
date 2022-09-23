@@ -26,12 +26,10 @@ class LinearLSQ(Module):
         self.has_bias = (linear.bias is not None)
         self.weight_bit = weight_bit
         self.bias_bit = bias_bit
+        self.training = training
+        self.set_param(linear)
         self.scale = Parameter(torch.Tensor(1))
         self.register_buffer('init_state', torch.zeros(1))
-
-        self.training = training
-        # self.bquantizer = STEQuantizer(bias_bit, linear.bias.numel()) if self.has_bias else None
-        self.set_param(linear)
 
     def __repr__(self):
         s = super(LinearLSQ, self).__repr__()
@@ -40,7 +38,6 @@ class LinearLSQ(Module):
         return s
 
     def set_param(self, linear):
-        # self.register_buffer('w_s', torch.zeros(1)) #not needed, just for analyzing purpose
         self.register_buffer('w_int', torch.zeros_like(linear.weight, requires_grad=False))
         if self.has_bias:
             self.register_buffer('b_int', torch.zeros_like(linear.bias, requires_grad=False))
@@ -53,22 +50,25 @@ class LinearLSQ(Module):
     
     def forward(self, x, a_s):
         if self.training:
-            x_q = x / a_s
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
             g = 1.0 / math.sqrt(self.linear.weight.numel() * Qp)
-
+            # requant inputs
+            x_q = x / a_s
+            
+            # initialize scale on first input
             if self.training and self.init_state == 0:
                 y = self.linear.weight.abs()
                 init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
-
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
 
+            # gives scale a lsq gradient
             w_s = grad_scale(self.scale, g)
-            self.w_int = round_pass((self.linear.weight / w_s).clamp(Qn, Qp))
-
             b_s = w_s * a_s
+
+            # quantize parameters, then calculate
+            self.w_int = round_pass((self.linear.weight / w_s).clamp(Qn, Qp))
             self.b_int = round_pass((self.linear.bias / b_s).clamp(bQn, bQp)) if self.has_bias else None
             return F.linear(x_q, self.w_int, self.b_int) * b_s, b_s
 
@@ -81,12 +81,10 @@ class ConvLSQ(Module):
         self.has_bias = (conv.bias is not None)
         self.weight_bit = weight_bit
         self.bias_bit = bias_bit
+        self.training = training
+        self.set_param(conv)
         self.scale = Parameter(torch.Tensor(1))
         self.register_buffer('init_state', torch.zeros(1))
-
-        self.training = training
-        # self.bquantizer = STEQuantizer(bias_bit, linear.bias.numel()) if self.has_bias else None
-        self.set_param(conv)
 
     def __repr__(self):
         s = super(ConvLSQ, self).__repr__()
@@ -111,21 +109,25 @@ class ConvLSQ(Module):
     
     def forward(self, x, a_s):
         if self.training:
-            x_q = x / a_s
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
             g = 1.0 / math.sqrt(self.conv.weight.numel() * Qp)
+            # requant inputs
+            x_q = x / a_s
 
+            # initialize scale on first input
             if self.training and self.init_state == 0:
                 y = self.conv.weight.abs()
                 init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)   
                 self.init_state.fill_(1)
 
+            # gives scale a lsq gradient
             w_s = grad_scale(self.scale, g)
-            self.w_int = round_pass((self.conv.weight / w_s).clamp(Qn, Qp))
-
             b_s = w_s * a_s
+
+            # quantize parameters, then calculate
+            self.w_int = round_pass((self.conv.weight / w_s).clamp(Qn, Qp))
             self.b_int = round_pass((self.conv.bias / b_s).clamp(bQn, bQp)) if self.has_bias else None
             return F.conv2d(x_q, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups) * b_s, b_s
 
