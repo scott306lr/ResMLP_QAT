@@ -129,7 +129,7 @@ class QLayer_Block(nn.Module):
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
-RES_RESCALE_BIT = 12
+RES_RESCALE_BIT = 16
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.
