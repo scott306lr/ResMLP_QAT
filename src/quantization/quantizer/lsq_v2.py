@@ -56,14 +56,14 @@ class LinearLSQ(Module):
             x_q = x / a_s
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
+            g = 1.0 / math.sqrt(self.linear.weight.numel() * Qp)
+
             if self.training and self.init_state == 0:
                 y = self.linear.weight.abs()
-                # init_scale = torch.nanquantile(y, 0.99)*2/(Qp-Qn)
                 init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
+
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
- 
-            g = 1.0 / math.sqrt(self.linear.weight.numel() * Qp)
 
             w_s = grad_scale(self.scale, g)
             self.w_int = round_pass((self.linear.weight / w_s).clamp(Qn, Qp))
@@ -105,21 +105,22 @@ class ConvLSQ(Module):
 
     def set_training(self, set=True):
         self.training = set
+
+    def reset_init_state(self):
+        self.init_state.fill_(0)
     
     def forward(self, x, a_s):
         if self.training:
             x_q = x / a_s
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
+            g = 1.0 / math.sqrt(self.conv.weight.numel() * Qp)
+
             if self.training and self.init_state == 0:
                 y = self.conv.weight.abs()
-                # y[y == 0] = float('nan')
-                # init_scale = torch.nanquantile(y, 0.99)*2/(Qp-Qn)
                 init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)   
                 self.init_state.fill_(1)
- 
-            g = 1.0 / math.sqrt(self.conv.weight.numel() * Qp)
 
             w_s = grad_scale(self.scale, g)
             self.w_int = round_pass((self.conv.weight / w_s).clamp(Qn, Qp))
@@ -154,32 +155,36 @@ class ActLSQ(Module):
 
     def forward(self, x, a_s=None):
         Qn, Qp = signed_minmax(self.to_bit)
-        if self.training:
-            if a_s == None:
-                x_q = x
-            else:
-                x_q = x / a_s
 
+        if self.training:
+            g = 1.0 / math.sqrt(x.numel() * Qp)
+            # requant inputs, first layer's input will always be fp
+            x_q = x / a_s if (a_s != None) else x
+
+            # initialize scale on first input
             if self.training and self.init_state == 0:
-                init_scale = (x.abs().max()*2)/(Qp-Qn)
-                # y = x.abs()
-                # init_scale = y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
+                # init_scale = (x.abs().max()*2)/(Qp-Qn)
+                init_scale = x.abs().mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
-            
-            g = 1.0 / math.sqrt(x_q.numel() * Qp)
+
+            # gives scale a lsq gradient
             scale = grad_scale(self.scale, g)
 
+            # calculate approximate dyadic value
+            # while preserving original scale gradient
+            # then quantize sum
             if a_s == None:
-                self.s = dyadic_scale(scale, self.mult_bit) #scale#
+                self.s = dyadic_scale(scale, self.mult_bit)
                 x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
-                return x_round * scale, scale
+                return x_round * self.s, self.s
             else:
-                self.s = dyadic_scale(scale / a_s, self.mult_bit) #scale / a_s#
+                self.s = dyadic_scale(scale / a_s, self.mult_bit)
                 x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
                 return x_round * self.s * a_s, self.s * a_s
 
         else:
+            # quantize sum
             x_round = round_pass((x / self.s).clamp(Qn, Qp))
             return x_round, None
 
@@ -208,34 +213,52 @@ class ResActLSQ(Module):
 
     def forward(self, x, a_s=None, res_x=None, res_a_s=None):
         Qn, Qp = signed_minmax(self.to_bit)
+        rQn, rQp = signed_minmax(32)
+
         if self.training:
+            g = 1.0 / math.sqrt(x.numel() * Qp)
+            # requant inputs
             res_x_q = res_x / res_a_s
             x_q = x / a_s
-            self.align_s = dyadic_scale(a_s/res_a_s, self.mult_bit)
-            res_x_align = round_pass((res_x_q / self.align_s).clamp(Qn, Qp))
-            mix_x_q = x_q + res_x_align
 
+            # align residual input
+            self.align_s = dyadic_scale(a_s/res_a_s, 8)
+            res_x_align = round_pass((res_x_q / self.align_s).clamp(rQn, rQp))
+            
+            # obtain sum
+            mix_x_q = x_q + res_x_align
+            
+            # initialize scale on first input
             if self.training and self.init_state == 0:
                 mix_x = mix_x_q * a_s
-                init_scale = (mix_x.abs().max()*2)/(Qp-Qn)
-                # init_scale = 2 * mix_x.abs().mean() / math.sqrt(Qp)
+                # init_scale = (mix_x.abs().max()*2)/(Qp-Qn)
+                # init_scale = mix_x.abs().mean() / math.sqrt(Qp)
+                init_scale = mix_x.abs().mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
 
-            g = 1.0 / math.sqrt(mix_x_q.numel() * Qp)
+            # gives scale a lsq gradient
             scale = grad_scale(self.scale, g)
+
+            # calculate approximate dyadic value
+            # while preserving original scale gradient
             self.s = dyadic_scale(scale / a_s, self.mult_bit)
+
+            # quantize sum
             mix_x_round = round_pass((mix_x_q / self.s).clamp(Qn, Qp))
 
             return mix_x_round * scale, scale
 
         else:
-            res_x_align = round_pass((res_x / self.align_s).clamp(Qn, Qp))
+            # align residual input
+            res_x_align = round_pass((res_x / self.align_s).clamp(rQn, rQp))
+            # obtain sum
             mix_x = x + res_x_align
+            # quantize sum
             mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
-            if self.to_fp32:
+            
+            if self.to_fp32: # last layer, connecting back to fp calculation
                 return mix_x_round*self.scale, None
-
             else:
                 return mix_x_round, None
 
