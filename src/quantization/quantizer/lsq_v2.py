@@ -57,8 +57,9 @@ class LinearLSQ(Module):
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
             if self.training and self.init_state == 0:
-                init_scale = (self.linear.weight.max() - self.linear.weight.min())/(Qp-Qn)
-                # init_scale = 2 * self.linear.weight.abs().mean() / math.sqrt(Qp)
+                y = self.linear.weight.abs()
+                # init_scale = torch.nanquantile(y, 0.99)*2/(Qp-Qn)
+                init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
  
@@ -111,9 +112,11 @@ class ConvLSQ(Module):
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
             if self.training and self.init_state == 0:
-                init_scale = (self.conv.weight.max() - self.conv.weight.min())/(Qp-Qn)
-                # init_scale = 2 * self.conv.weight.abs().mean() / math.sqrt(Qp)
-                self.scale.data.copy_(init_scale)
+                y = self.conv.weight.abs()
+                # y[y == 0] = float('nan')
+                # init_scale = torch.nanquantile(y, 0.99)*2/(Qp-Qn)
+                init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
+                self.scale.data.copy_(init_scale)   
                 self.init_state.fill_(1)
  
             g = 1.0 / math.sqrt(self.conv.weight.numel() * Qp)
@@ -158,8 +161,9 @@ class ActLSQ(Module):
                 x_q = x / a_s
 
             if self.training and self.init_state == 0:
-                # init_scale = 2 * x.abs().mean() / math.sqrt(Qp)
-                init_scale = (x.max() - x.min())/(Qp-Qn)
+                init_scale = (x.abs().max()*2)/(Qp-Qn)
+                # y = x.abs()
+                # init_scale = y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
             
@@ -213,8 +217,8 @@ class ResActLSQ(Module):
 
             if self.training and self.init_state == 0:
                 mix_x = mix_x_q * a_s
+                init_scale = (mix_x.abs().max()*2)/(Qp-Qn)
                 # init_scale = 2 * mix_x.abs().mean() / math.sqrt(Qp)
-                init_scale = (mix_x.max() - mix_x.min())/(Qp-Qn)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
 
