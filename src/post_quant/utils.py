@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from ..quantization.quantizer.lsq_v2 import ActLSQ
+from ..quantization.quantizer.lsq import ActLSQ
 
 def get_linear_layers(model, specify_names=None, prefix=""):
     linear_layers = []

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import copy
 
-from ..quantization.quantizer.lsq_v2 import *
+from ..quantization.quantizer.lsq import *
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath

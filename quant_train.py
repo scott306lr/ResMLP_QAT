@@ -23,7 +23,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
 from src.data_utils import AverageMeter, ProgressMeter
-from src.quantization.quantizer.lsq_v2 import set_training
+from src.quantization.quantizer.lsq import set_training
 from src.post_quant.cle import cle_for_resmlp
 from src.models import *
 
