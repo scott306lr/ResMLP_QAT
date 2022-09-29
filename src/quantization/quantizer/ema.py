@@ -1,3 +1,5 @@
+#! Implement back if theres additional time 
+
 import torch
 from torch.nn import Module, Parameter
 import torch.nn.functional as F
@@ -93,6 +95,7 @@ class ConvLSQ(Module):
         return s
 
     def set_param(self, conv):
+        # self.register_buffer('w_s', torch.zeros(1)) #not needed, just for analyzing purpose
         self.register_buffer('w_int', torch.zeros_like(conv.weight, requires_grad=False))
         if self.has_bias:
             self.register_buffer('b_int', torch.zeros_like(conv.bias, requires_grad=False))
@@ -236,7 +239,7 @@ class ResActLSQ(Module):
             res_x_q = res_x / res_a_s
             x_q = x / a_s
 
-            # align residual input and quantize
+            # align residual input
             # ! shift should be as same as rescale's
             self.align_s, (self.align_mult, self.align_shift) = dyadic_scale(a_s/res_a_s, 8) 
             res_x_align = round_pass((res_x_q / self.align_s).clamp(rQn, rQp))
@@ -256,9 +259,11 @@ class ResActLSQ(Module):
             # gives scale a lsq gradient
             scale = grad_scale(self.scale, g)
 
-            # calculate approximate dyadic value and quantize
+            # calculate approximate dyadic value
             # while preserving original scale gradient
             self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
+
+            # quantize sum
             mix_x_round = round_pass((mix_x_q / self.s).clamp(Qn, Qp))
 
             return mix_x_round * scale, scale
