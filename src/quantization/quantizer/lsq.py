@@ -277,7 +277,6 @@ class ResActLSQ(Module):
             mix_x = x + res_x_align
 
             # quantize sum
-<<<<<<< HEAD
             mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
             # mix_x_round = (
             #     torch.bitwise_right_shift(
@@ -285,11 +284,6 @@ class ResActLSQ(Module):
             #         self.shift
             #     ) + 1
             # ).type(torch.float)
-=======
-            # mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
-            m, e = scale_to_dyadic(1 / self.s, self.mult_bit)
-            mix_x_round = torch.bitwise_right_shift(mix_x.type(torch.int64)*m.type(torch.int64), e.type(torch.int64)).type(torch.float)+1
->>>>>>> df1ab2084ea5b026746e2aa533597246b522aefe
             
             if self.to_fp32: # last layer, connecting back to fp calculation
                 return mix_x_round*self.scale, None
