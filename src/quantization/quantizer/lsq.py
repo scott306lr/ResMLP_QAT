@@ -210,8 +210,8 @@ class ResActLSQ(Module):
         self.register_buffer('init_state', torch.zeros(1))
         self.register_buffer('align_s', torch.ones(1, requires_grad=False))
         self.register_buffer('s', torch.ones(1, requires_grad=False))
-        self.register_buffer('align_mult', torch.ones(1, requires_grad=False))
-        self.register_buffer('align_shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('align_mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
+        self.register_buffer('align_shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
         self.register_buffer('mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
         self.register_buffer('shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
 
