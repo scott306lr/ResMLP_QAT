@@ -13,7 +13,7 @@ def grad_scale(x: torch.Tensor, scale: torch.Tensor):
 def dyadic_scale(scale: torch.Tensor, mult_bit):
     m, e = scale_to_dyadic(1 / scale, mult_bit)
     d_scale = 1 / dyadic_to_scale(m, e)
-    return d_scale.detach() - scale.detach() + scale
+    return d_scale.detach() - scale.detach() + scale, (m, e)
 
 def round_pass(x: torch.Tensor):
     y = x.round()
@@ -143,8 +143,8 @@ class ActLSQ(Module):
         self.scale = Parameter(torch.Tensor(1))
         self.register_buffer('init_state', torch.zeros(1))
         self.register_buffer('s', torch.ones(1, requires_grad=False))
-        self.register_buffer('mult', torch.ones(1, requires_grad=False))
-        self.register_buffer('shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
 
     def __repr__(self):
         s = super(ActLSQ, self).__repr__()
@@ -179,20 +179,24 @@ class ActLSQ(Module):
             # while preserving original scale gradient
             # then quantize sum
             if a_s == None:
-                self.s = dyadic_scale(scale, self.mult_bit)
+                self.s, (self.mult, self.shift) = dyadic_scale(scale, self.mult_bit)
                 x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
                 return x_round * self.s, self.s
             else:
-                self.s = dyadic_scale(scale / a_s, self.mult_bit)
+                self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
                 x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
                 return x_round * self.s * a_s, self.s * a_s
 
         else:
             # quantize sum
-            # x_round = round_pass((x / self.s).clamp(Qn, Qp))
-            m, e = scale_to_dyadic(1 / self.s, self.mult_bit)
-            x_round = torch.bitwise_right_shift(x.type(torch.int64)*m.type(torch.int64), e.type(torch.int64)).type(torch.float) + 1
-            
+            x_round = round_pass((x / self.s).clamp(Qn, Qp))
+            # x_round = (
+            #     torch.bitwise_right_shift(
+            #         x.type(torch.int64)*self.mult, 
+            #         self.shift
+            #     ) + 1
+            # ).type(torch.float)
+
             # print((x_round_org - x_round).max())
             return x_round, None
 
@@ -210,8 +214,8 @@ class ResActLSQ(Module):
         self.register_buffer('s', torch.ones(1, requires_grad=False))
         self.register_buffer('align_mult', torch.ones(1, requires_grad=False))
         self.register_buffer('align_shift', torch.ones(1, requires_grad=False))
-        self.register_buffer('mult', torch.ones(1, requires_grad=False))
-        self.register_buffer('shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
 
     def __repr__(self):
         s = super(ResActLSQ, self).__repr__()
@@ -236,7 +240,7 @@ class ResActLSQ(Module):
 
             # align residual input
             # ! shift should be as same as rescale's
-            self.align_s = dyadic_scale(a_s/res_a_s, 8) 
+            self.align_s, (self.align_mult, self.align_shift) = dyadic_scale(a_s/res_a_s, 8) 
             res_x_align = round_pass((res_x_q / self.align_s).clamp(rQn, rQp))
             
             # obtain sum
@@ -256,7 +260,7 @@ class ResActLSQ(Module):
 
             # calculate approximate dyadic value
             # while preserving original scale gradient
-            self.s = dyadic_scale(scale / a_s, self.mult_bit)
+            self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
 
             # quantize sum
             mix_x_round = round_pass((mix_x_q / self.s).clamp(Qn, Qp))
@@ -266,15 +270,24 @@ class ResActLSQ(Module):
         else:
             # align residual input
             # res_x_align = round_pass((res_x / self.align_s).clamp(rQn, rQp))
-            m, e = scale_to_dyadic(1 / self.align_s, self.mult_bit)
-            # res_x_align = torch.floor(res_x.type(torch.int64)*m.type(torch.int64)/ 2**e)
-            res_x_align = torch.bitwise_right_shift(res_x.type(torch.int64)*m.type(torch.int64), e.type(torch.int64)).type(torch.float)+1
+            res_x_align = (
+                torch.bitwise_right_shift(
+                    res_x.type(torch.int64)*self.align_mult, 
+                    self.align_shift
+                ) + 1
+            ).type(torch.float)
+
             # obtain sum
             mix_x = x + res_x_align
+
             # quantize sum
             # mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
-            m, e = scale_to_dyadic(1 / self.s, self.mult_bit)
-            mix_x_round = torch.bitwise_right_shift(mix_x.type(torch.int64)*m.type(torch.int64), e.type(torch.int64)).type(torch.float)+1
+            mix_x_round = (
+                torch.bitwise_right_shift(
+                    mix_x.type(torch.int64)*self.mult, 
+                    self.shift
+                ) + 1
+            ).type(torch.float)
             
             if self.to_fp32: # last layer, connecting back to fp calculation
                 return mix_x_round*self.scale, None

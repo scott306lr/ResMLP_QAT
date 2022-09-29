@@ -16,7 +16,7 @@ def scale_to_dyadic(fp32_scale: torch.Tensor, mult_bits: int, limit_bits=False):
     new_e = mult_bits - e.type(torch.float) # right shift instead of left
 
     if (new_e < 0) : raise ValueError(f'Shift value is negative! e: {new_e}, org_e: {-e}')
-    return (m, new_e)
+    return (m.type(torch.int64), new_e.type(torch.int64))
 
 def dyadic_to_scale(mult: torch.Tensor, shift: torch.Tensor):
     scale = (mult.type(torch.double) / (2.0 ** shift).type(torch.double)).type(torch.float)
