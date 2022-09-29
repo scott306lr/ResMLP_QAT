@@ -5,7 +5,7 @@ import math
 
 from ..utils import signed_minmax, scale_to_dyadic, dyadic_to_scale
 
-def grad_scale(x: torch.Tensor, scale):
+def grad_scale(x: torch.Tensor, scale: torch.Tensor):
     y = x
     y_grad = x * scale
     return y.detach() - y_grad.detach() + y_grad
@@ -143,6 +143,8 @@ class ActLSQ(Module):
         self.scale = Parameter(torch.Tensor(1))
         self.register_buffer('init_state', torch.zeros(1))
         self.register_buffer('s', torch.ones(1, requires_grad=False))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False))
 
     def __repr__(self):
         s = super(ActLSQ, self).__repr__()
@@ -165,8 +167,8 @@ class ActLSQ(Module):
 
             # initialize scale on first input
             if self.training and self.init_state == 0:
-                # init_scale = (x.abs().max()*2)/(Qp-Qn)
-                init_scale = x.abs().mean() / math.sqrt(Qp)
+                init_scale = (x.abs().max()*2)/(Qp-Qn)
+                # init_scale = x.abs().mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
 
@@ -187,7 +189,11 @@ class ActLSQ(Module):
 
         else:
             # quantize sum
-            x_round = round_pass((x / self.s).clamp(Qn, Qp))
+            # x_round = round_pass((x / self.s).clamp(Qn, Qp))
+            m, e = scale_to_dyadic(1 / self.s, self.mult_bit)
+            x_round = torch.bitwise_right_shift(x.type(torch.int64)*m.type(torch.int64), e.type(torch.int64)).type(torch.float) + 1
+            
+            # print((x_round_org - x_round).max())
             return x_round, None
 
 class ResActLSQ(Module):
@@ -200,8 +206,12 @@ class ResActLSQ(Module):
         self.to_fp32 = to_fp32
         self.scale = Parameter(torch.Tensor(1))
         self.register_buffer('init_state', torch.zeros(1))
-        self.register_buffer('s', torch.ones(1, requires_grad=False))
         self.register_buffer('align_s', torch.ones(1, requires_grad=False))
+        self.register_buffer('s', torch.ones(1, requires_grad=False))
+        self.register_buffer('align_mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('align_shift', torch.ones(1, requires_grad=False))
+        self.register_buffer('mult', torch.ones(1, requires_grad=False))
+        self.register_buffer('shift', torch.ones(1, requires_grad=False))
 
     def __repr__(self):
         s = super(ResActLSQ, self).__repr__()
@@ -235,9 +245,9 @@ class ResActLSQ(Module):
             # initialize scale on first input
             if self.training and self.init_state == 0:
                 mix_x = mix_x_q * a_s
-                # init_scale = (mix_x.abs().max()*2)/(Qp-Qn)
+                init_scale = (mix_x.abs().max()*2)/(Qp-Qn)
                 # init_scale = mix_x.abs().mean() / math.sqrt(Qp)
-                init_scale = mix_x.abs().mean() / math.sqrt(Qp)
+                # init_scale = mix_x.abs().mean() / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
 
@@ -255,11 +265,17 @@ class ResActLSQ(Module):
 
         else:
             # align residual input
-            res_x_align = round_pass((res_x / self.align_s).clamp(rQn, rQp))
+            # res_x_align = round_pass((res_x / self.align_s).clamp(rQn, rQp))
+            m, e = scale_to_dyadic(1 / self.align_s, self.mult_bit)
+            # res_x_align = torch.floor(res_x.type(torch.int64)*m.type(torch.int64)/ 2**e)
+            res_x_align = torch.bitwise_right_shift(res_x.type(torch.int64)*m.type(torch.int64), e.type(torch.int64)).type(torch.float)+1
             # obtain sum
             mix_x = x + res_x_align
             # quantize sum
-            mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
+            # mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
+            m, e = scale_to_dyadic(1 / self.s, self.mult_bit)
+            mix_x_round = torch.floor(mix_x.type(torch.int64)*m.type(torch.int64)/ 2**e)
+            mix_x_round = torch.bitwise_right_shift(mix_x.type(torch.int64)*m.type(torch.int64), e.type(torch.int64)).type(torch.float)+1
             
             if self.to_fp32: # last layer, connecting back to fp calculation
                 return mix_x_round*self.scale, None

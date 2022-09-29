@@ -26,6 +26,7 @@ from src.data_utils import AverageMeter, ProgressMeter
 from src.quantization.quantizer.lsq import set_training
 from src.post_quant.cle import cle_for_resmlp
 from src.models import *
+from timm.scheduler.cosine_lr import CosineLRScheduler
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--data', metavar='DIR',
@@ -306,7 +307,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
     
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+    scheduler = CosineLRScheduler(optimizer, t_initial=args.epochs)
     cudnn.benchmark = True
 
     # Data loading code
@@ -388,7 +389,7 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
         acc1 = validate(val_loader, model, criterion, args)
-        scheduler.step()
+        scheduler.step(epoch)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -575,7 +576,8 @@ def train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_load
                     'best_acc1': best_acc1,
                     'optimizer': optimizer.state_dict(),
                 }, is_best, args.save_path)
-                print(model.state_dict())
+                # print(model.state_dict())
+                print("Saved checkpoint.")
 
 
 def validate(val_loader, model, criterion, args):
