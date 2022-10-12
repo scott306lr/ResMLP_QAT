@@ -186,9 +186,9 @@ def get_args_parser():
     parser.add_argument('--wandb',
                     action='store_true',
                     help='if set to true, log with wandb')
-    # parser.add_argument("--local_rank", type=int, default=0)
-    # if 'LOCAL_RANK' not in os.environ:
-    #     os.environ['LOCAL_RANK'] = str(args.local_rank)
+    parser.add_argument("--local_rank", type=int, default=0)
+    if 'LOCAL_RANK' not in os.environ:
+        os.environ['LOCAL_RANK'] = str(args.local_rank)
     return parser
 
 
