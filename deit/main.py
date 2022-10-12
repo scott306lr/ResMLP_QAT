@@ -418,7 +418,7 @@ def main(args):
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
         return
 
-    if args.wandb:
+    if (args.wandb and global_rank == 0):
         # wandb.login(key=)
         id = wandb.util.generate_id()
         wandb.init(
@@ -444,7 +444,7 @@ def main(args):
             optimizer, device, epoch, loss_scaler,
             args.clip_grad, model_ema, mixup_fn,
             set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
-            wandb_log = args.wandb,
+            wandb_log = (args.wandb and global_rank == 0),
             args = args,
         )
 
@@ -463,7 +463,7 @@ def main(args):
                 }, checkpoint_path)
              
 
-        test_stats = evaluate(data_loader_val, model, device, wandb_log=args.wandb)
+        test_stats = evaluate(data_loader_val, model, device, wandb_log=(args.wandb and global_rank == 0))
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
         
         if max_accuracy < test_stats["acc1"]:
