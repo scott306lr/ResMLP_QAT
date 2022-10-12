@@ -195,12 +195,24 @@ def main(args):
     utils.init_distributed_mode(args)
 
     print(args)
+    if args.wandb:
+        # wandb.login(key=)
+        id = wandb.util.generate_id()
+        wandb.init(
+            project="resmlp_qat",
+            id=id,
+            # resume=("must" if args.resume is True else False),
+            config={
+                "epochs": args.epochs,
+                "init_learning_rate": args.lr,
+                "batch_size": args.batch_size,
+                "dataset": args.data_set,
+            })
 
     if args.distillation_type != 'none' and args.finetune and not args.eval:
         raise NotImplementedError("Finetuning with distillation not yet supported")
 
     device = torch.device(args.device)
-    print(device)
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -418,19 +430,6 @@ def main(args):
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
         return
 
-    if args.wandb:
-        # wandb.login(key=)
-        id = wandb.util.generate_id()
-        wandb.init(
-            project="resmlp_qat",
-            id=id,
-            # resume=("must" if args.resume is True else False),
-            config={
-                "epochs": args.epochs,
-                "init_learning_rate": args.lr,
-                "batch_size": args.batch_size,
-                "dataset": args.data_set,
-            })
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
