@@ -24,7 +24,7 @@ class Affine(nn.Module):
     
 class layers_scale_mlp_blocks(nn.Module):
 
-    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.GELU,init_values=1e-4,num_patches = 196):
+    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU,init_values=1e-4,num_patches = 196):
         super().__init__()
         self.norm1 = nn.BatchNorm1d(num_patches)
         self.attn = nn.Linear(num_patches, num_patches)
@@ -43,7 +43,7 @@ class layers_scale_mlp_blocks(nn.Module):
 class resmlp_models(nn.Module):
 
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,drop_rate=0.,
-                 Patch_layer=PatchEmbed,act_layer=nn.GELU,
+                 Patch_layer=PatchEmbed,act_layer=nn.ReLU,
                 drop_path_rate=0.0,init_scale=1e-4):
         super().__init__()
 
