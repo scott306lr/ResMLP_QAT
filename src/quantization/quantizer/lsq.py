@@ -10,6 +10,11 @@ def grad_scale(x: torch.Tensor, scale: torch.Tensor):
     y_grad = x * scale
     return y.detach() - y_grad.detach() + y_grad
 
+# def replace_grad_scale(x: torch.Tensor, scale: torch.Tensor):
+#     y = x
+#     y_grad = x * scale
+#     return y.detach() - scale.detach() + scale
+
 def dyadic_scale(scale: torch.Tensor, mult_bit):
     m, e = scale_to_dyadic(1 / scale, mult_bit)
     d_scale = 1 / dyadic_to_scale(m, e)
@@ -179,7 +184,9 @@ class ActLSQ(Module):
             # then quantize sum
             if a_s == None:
                 self.s, (self.mult, self.shift) = dyadic_scale(scale, self.mult_bit)
-                x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
+                x_weight = x_q / self.s
+                x_round = round_pass((x_weight).clamp(Qn, Qp))
+                # x_round = grad_scale(x_round, 0.1)
                 return x_round * self.s, self.s
             else:
                 self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
@@ -193,7 +200,7 @@ class ActLSQ(Module):
             #     torch.bitwise_right_shift(
             #         x.type(torch.int64)*self.mult, 
             #         self.shift
-            #     ) + 1
+            #     )
             # ).type(torch.float)
 
             return x_round, None
@@ -282,7 +289,7 @@ class ResActLSQ(Module):
             #     torch.bitwise_right_shift(
             #         mix_x.type(torch.int64)*self.mult, 
             #         self.shift
-            #     ) + 1
+            #     )
             # ).type(torch.float)
             
             if self.to_fp32: # last layer, connecting back to fp calculation

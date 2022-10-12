@@ -278,7 +278,7 @@ def main_worker(gpu, ngpus_per_node, args):
             #     modified_dict[modified_key] = value
             # model.load_state_dict(modified_dict, strict=False)
             # print(torch.load(args.resume)['state_dict'])
-            model.load_state_dict(torch.load(args.resume)['state_dict'])
+            model.load_state_dict(torch.load(args.resume)['state_dict'], strict=False)
         else:
             logging.info("=> no quantized checkpoint found at '{}'".format(args.resume))
 
