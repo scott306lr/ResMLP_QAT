@@ -418,7 +418,7 @@ def main(args):
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
         return
 
-    if args.wandb and global_rank==0:
+    if args.wandb:
         # wandb.login(key=)
         id = wandb.util.generate_id()
         wandb.init(
