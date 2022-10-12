@@ -22,14 +22,14 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
-                    set_training_mode=True, wandb_log=False, args = None):
+                    set_training_mode=True, wandb_run=None, args = None):
     model.train(set_training_mode)
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
-    for samples, targets in metric_logger.log_every(data_loader, print_freq, header, wandb_log):
+    for samples, targets in metric_logger.log_every(data_loader, print_freq, header, wandb_run):
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
@@ -78,7 +78,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
 
 @torch.no_grad()
-def evaluate(data_loader, model, device, wandb_log=False):
+def evaluate(data_loader, model, device, wandb_run=None):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -106,12 +106,12 @@ def evaluate(data_loader, model, device, wandb_log=False):
     metric_logger.synchronize_between_processes()
     print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
           .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
-    if wandb_log:
+    if wandb_run != None:
         to_log = {
             'Evaluation/loss': metric_logger.loss.global_avg,
             'Evaluation/acc1': metric_logger.acc1.global_avg,
             'Evaluation/acc5': metric_logger.acc5.global_avg
         }
-        wandb.log(to_log)
+        wandb_run.log(to_log)
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}

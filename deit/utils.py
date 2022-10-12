@@ -114,7 +114,7 @@ class MetricLogger(object):
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
-    def log_every(self, iterable, print_freq, header=None, wandb_log=False):
+    def log_every(self, iterable, print_freq, header=None, wandb_run=None):
         i = 0
         if not header:
             header = ''
@@ -154,11 +154,11 @@ class MetricLogger(object):
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
 
-                if wandb_log:
+                if wandb_run != None:
                     to_log = {}
                     for k, v in self.meters.items():
                         to_log[k] = v.value
-                    wandb.log(to_log)
+                    wandb_run.log(to_log)
             i += 1
             end = time.time()
         total_time = time.time() - start_time
