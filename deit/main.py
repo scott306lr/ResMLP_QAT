@@ -420,7 +420,7 @@ def main(args):
         return
 
     wandb_run = None
-    if args.wandb and args.local_rank == 0:
+    if args.wandb and args.gpu == 0:
         # wandb.login(key=)
         id = wandb.util.generate_id()
         wandb_run = wandb.init(

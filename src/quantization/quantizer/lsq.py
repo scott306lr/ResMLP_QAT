@@ -21,7 +21,7 @@ def dyadic_scale(scale: torch.Tensor, mult_bit):
     return d_scale.detach() - scale.detach() + scale, (m, e)
 
 def round_pass(x: torch.Tensor):
-    y = x.round()
+    y = x.round()#(x + 0.5).round()
     y_grad = x
     return y.detach() - y_grad.detach() + y_grad
 
@@ -198,7 +198,7 @@ class ActLSQ(Module):
             x_round = round_pass((x / self.s).clamp(Qn, Qp))
             # x_round = (
             #     torch.bitwise_right_shift(
-            #         x.type(torch.int64)*self.mult, 
+            #         x.type(torch.int64)*self.mult + 1, 
             #         self.shift
             #     )
             # ).type(torch.float)
@@ -275,9 +275,9 @@ class ResActLSQ(Module):
             res_x_align = round_pass((res_x / self.align_s).clamp(rQn, rQp))
             # res_x_align = (
             #     torch.bitwise_right_shift(
-            #         res_x.type(torch.int64)*self.align_mult, 
+            #         res_x.type(torch.int64)*self.align_mult + 1, 
             #         self.align_shift
-            #     ) + 1
+            #     )
             # ).type(torch.float)
 
             # obtain sum
@@ -287,7 +287,7 @@ class ResActLSQ(Module):
             mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
             # mix_x_round = (
             #     torch.bitwise_right_shift(
-            #         mix_x.type(torch.int64)*self.mult, 
+            #         mix_x.type(torch.int64)*self.mult + 1, 
             #         self.shift
             #     )
             # ).type(torch.float)
