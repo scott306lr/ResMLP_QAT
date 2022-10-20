@@ -369,11 +369,11 @@ def main_worker(gpu, ngpus_per_node, args):
     # wandb initialization
     if args.wandb:
         # wandb.login(key=)
-        id = wandb.util.generate_id()
+        id = wandb.util.generate_id() #'33034pb2'
         wandb.init(
             project="resmlp_qat",
             id=id,
-            # resume=("must" if args.resume is True else False),
+            resume=("must" if args.resume is True else False),
             config={
                 "epochs": args.epochs,
                 "learning_rate": args.lr,
@@ -643,7 +643,7 @@ def validate(val_loader, model, criterion, args):
                 }, args.save_path + 'quantized_checkpoint.pth.tar')
 
                 
-    logging.info(model.state_dict().items())
+    # logging.info(model.state_dict().items())
     set_training(model, True)
     return top1.avg
 

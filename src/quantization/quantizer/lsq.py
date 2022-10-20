@@ -21,7 +21,7 @@ def dyadic_scale(scale: torch.Tensor, mult_bit):
     return d_scale.detach() - scale.detach() + scale, (m, e)
 
 def round_pass(x: torch.Tensor):
-    y = x.round()
+    y = x.round()#(x + 0.5).round()
     y_grad = x
     return y.detach() - y_grad.detach() + y_grad
 
@@ -72,9 +72,78 @@ class LinearLSQ(Module):
             w_s = grad_scale(self.scale, g)
             b_s = w_s * a_s
 
+            print("Linear: ", self.linear.weight, self.linear.bias)
             # quantize parameters, then calculate
             self.w_int = round_pass((self.linear.weight / w_s).clamp(Qn, Qp))
             self.b_int = round_pass((self.linear.bias / b_s).clamp(bQn, bQp)) if self.has_bias else None
+            return F.linear(x_q, self.w_int, self.b_int) * b_s, b_s
+
+        else:
+            return F.linear(x, self.w_int, self.b_int), None
+
+class LinearBNLSQ(Module):
+    def __init__(self, bn, weight_bit=8, bias_bit=32, training=True):
+        super(LinearBNLSQ, self).__init__()
+        self.has_bias = (bn.bias is not None)
+        self.weight_bit = weight_bit
+        self.bias_bit = bias_bit
+        self.training = training
+        self.set_param(bn)
+        self.scale = Parameter(torch.Tensor(1))
+        self.register_buffer('init_state', torch.zeros(1))
+
+    def __repr__(self):
+        s = super(LinearBNLSQ, self).__repr__()
+        s = "(" + s + " weight_bit={}, bias_bit={}, has_bias={})".format(
+            self.weight_bit, self.bias_bit, self.has_bias)
+        return s
+
+    def set_param(self, bn):
+        self.register_buffer('w_int', torch.zeros_like(bn.weight, requires_grad=False))
+        if self.has_bias:
+            self.register_buffer('b_int', torch.zeros_like(bn.bias, requires_grad=False))
+        else:
+            self.b_int = None
+        self.bn = bn
+
+    def set_training(self, set=True):
+        self.training = set
+    
+    def forward(self, x, a_s):
+        if self.training:
+            Qn, Qp = signed_minmax(self.weight_bit)
+            bQn, bQp = signed_minmax(self.bias_bit)
+            g = 1.0 / math.sqrt(self.bn.weight.numel() * Qp)
+            # requant inputs
+            x_q = x / a_s
+
+            batch_mean = torch.mean(x, dim=(0, 1))
+            batch_var = torch.var(x, dim=(0, 1))
+
+            # update mean and variance in running stats
+            self.bn.running_mean = self.bn.running_mean.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_mean
+            self.bn.running_var = self.bn.running_var.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_var
+            output_factor = self.bn.weight / torch.sqrt(batch_var + self.bn.eps)
+
+            weight = torch.diag(output_factor)
+            bias = - output_factor * batch_mean + self.bn.bias
+            
+            # initialize scale on first input
+            if self.training and self.init_state == 0:
+                y = weight.abs()
+                init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
+                self.scale.data.copy_(init_scale)
+                self.init_state.fill_(1)
+
+            # gives scale a lsq gradient
+            w_s = grad_scale(self.scale, g)
+            b_s = w_s * a_s
+
+            # quantize parameters, then calculate
+            self.w_int = round_pass((weight / w_s).clamp(Qn, Qp))
+            self.b_int = round_pass((bias / b_s).clamp(bQn, bQp)) if self.has_bias else None
+            # print("x: ", x.shape)
+            # print("BN: ", self.w_int.shape, self.b_int.shape)
             return F.linear(x_q, self.w_int, self.b_int) * b_s, b_s
 
         else:
@@ -184,21 +253,20 @@ class ActLSQ(Module):
             # then quantize sum
             if a_s == None:
                 self.s, (self.mult, self.shift) = dyadic_scale(scale, self.mult_bit)
-                x_weight = x_q / self.s
-                x_round = round_pass((x_weight).clamp(Qn, Qp))
+                x_round = round_pass((x_q / self.s + 0.5).clamp(Qn, Qp))
                 # x_round = grad_scale(x_round, 0.1)
                 return x_round * self.s, self.s
             else:
                 self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
-                x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
+                x_round = round_pass((x_q / self.s + 0.5).clamp(Qn, Qp))
                 return x_round * self.s * a_s, self.s * a_s
 
         else:
             # quantize sum
-            x_round = round_pass((x / self.s).clamp(Qn, Qp))
+            x_round = round_pass((x / self.s + 0.5).clamp(Qn, Qp))
             # x_round = (
             #     torch.bitwise_right_shift(
-            #         x.type(torch.int64)*self.mult, 
+            #         x.type(torch.int64)*self.mult + 1, 
             #         self.shift
             #     )
             # ).type(torch.float)
@@ -246,7 +314,7 @@ class ResActLSQ(Module):
             # align residual input and quantize
             # ! shift should be as same as rescale's
             self.align_s, (self.align_mult, self.align_shift) = dyadic_scale(a_s/res_a_s, 8) 
-            res_x_align = round_pass((res_x_q / self.align_s).clamp(rQn, rQp))
+            res_x_align = round_pass((res_x_q / self.align_s + 0.5).clamp(rQn, rQp))
             
             # obtain sum
             mix_x_q = x_q + res_x_align
@@ -272,12 +340,12 @@ class ResActLSQ(Module):
 
         else:
             # align residual input
-            res_x_align = round_pass((res_x / self.align_s).clamp(rQn, rQp))
+            res_x_align = round_pass((res_x / self.align_s + 0.5).clamp(rQn, rQp))
             # res_x_align = (
             #     torch.bitwise_right_shift(
-            #         res_x.type(torch.int64)*self.align_mult, 
+            #         res_x.type(torch.int64)*self.align_mult + 1, 
             #         self.align_shift
-            #     ) + 1
+            #     )
             # ).type(torch.float)
 
             # obtain sum
@@ -287,7 +355,7 @@ class ResActLSQ(Module):
             mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
             # mix_x_round = (
             #     torch.bitwise_right_shift(
-            #         mix_x.type(torch.int64)*self.mult, 
+            #         mix_x.type(torch.int64)*self.mult + 1, 
             #         self.shift
             #     )
             # ).type(torch.float)
