@@ -68,7 +68,7 @@ class QLayer_Block(nn.Module):
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
-        self.norm1 = LinearLSQ(block.norm1)
+        self.norm1 = LinearBNLSQ(block.norm1)
         self.act1 = ActLSQ()
 
         self.attn = LinearLSQ(block.attn)
@@ -77,7 +77,7 @@ class QLayer_Block(nn.Module):
         self.gamma_1 = LinearLSQ(block.gamma_1)
         self.add_1 = ResActLSQ(to_bit=self.res_to_bit)
 
-        self.norm2 = LinearLSQ(block.norm2)
+        self.norm2 = LinearBNLSQ(block.norm2)
         self.act3 = ActLSQ()
 
         self.mlp = Q_Mlp(block.mlp)

@@ -3,3 +3,5 @@
 *.pth
 *.tar
 folder/
+
+wandb/
