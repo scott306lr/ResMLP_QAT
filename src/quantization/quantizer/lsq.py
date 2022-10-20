@@ -121,10 +121,10 @@ class LinearBNLSQ(Module):
             batch_var = torch.var(x, dim=(0, 1))
 
             # update mean and variance in running stats
-            self.bn.running_mean = self.bn.running_mean.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_mean
-            self.bn.running_var = self.bn.running_var.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_var
-            output_factor = self.bn.weight / torch.sqrt(batch_var + self.bn.eps)
+            # self.bn.running_mean = self.bn.running_mean.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_mean
+            # self.bn.running_var = self.bn.running_var.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_var
 
+            output_factor = self.bn.weight / torch.sqrt(batch_var + self.bn.eps)
             weight = torch.diag(output_factor)
             bias = - output_factor * batch_mean + self.bn.bias
             
