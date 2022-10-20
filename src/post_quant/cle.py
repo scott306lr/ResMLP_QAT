@@ -28,7 +28,7 @@ def cross_layer_equalization(linear_layer_pairs):
     return linear_layer_pairs
 
 def cle_for_resmlp(model):
-    todo_layer = model.blocks[0]
+    # todo_layer = model.blocks[0]
     linear_layers = get_linear_layers(model.blocks) # 7 * 24
     for i in range(0, 24):
         cross_layer_equalization([

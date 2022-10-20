@@ -1,3 +1,4 @@
+from ..quantization.data_utils import calibrate, getTrainData
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -56,10 +57,11 @@ def layer_dist(model, start, end, show_layers=None, type="weight", name="Distrib
     my_boxplot(data, labels, name, ax, total=len(labels), sep_interval=(len(labels) // (end-start+1)))
 
 def flat_act_func(org_val, output):
-    return output.detach().numpy().flatten()
+    return output.cpu().detach().numpy().flatten()
 
-def act_dist(model, start, end, show_layers=None, name="Activation Distribution from Gamma_1/Gamma_2 for Each Layer", ax=None):
+def act_dist(model, start, end, show_layers=None, name="Activation Distribution from Gamma_1/Gamma_2 for Each Layer", ax=None, real_sim=False):
     model_layers = []
+    model.eval()
     for i in range(start, end+1):
         todo_layer = model.blocks[i]
         model_layers.append(get_linear_layers(todo_layer, specify_names=show_layers, prefix=f"{i}-"))
@@ -67,7 +69,14 @@ def act_dist(model, start, end, show_layers=None, name="Activation Distribution 
     activations = {}
     hook_handler = HookHandler()
     hook_handler.create_apply_hook(flat_act_func, activations, model_layers)
-    model(simulate_input())
+    if real_sim:
+        print("Loading a small piece of training data...")
+        data_loader = getTrainData(dataset='imagenet', path="E:\datasets\imagenet", batch_size=64, data_percentage=0.001)
+        print("Calibrating...")
+        calibrate(data_loader, model)
+    else:
+        model(simulate_input().cuda())
+
     hook_handler.remove_hook()
     
     data = []
