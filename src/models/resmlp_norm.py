@@ -5,7 +5,7 @@ from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
 
 __all__ = [
-    'resmlp_24'
+    'resmlp_24_norm'
 ]
 
 # class Affine(nn.Module):
@@ -24,24 +24,24 @@ class layers_scale_mlp_blocks(nn.Module):
 
     def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4, num_patches = 196):
         super().__init__()
-        self.norm1 = Affine(dim)
+        self.norm1 = nn.BatchNorm1d(dim, affine=True)#Affine(dim)
         self.attn = nn.Linear(num_patches, num_patches)
         self.gamma_1 = nn.Linear(dim, dim, bias=False)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.skip_add = nn.quantized.FloatFunctional()
 
-        self.norm2 = Affine(dim)
+        self.norm2 = nn.BatchNorm1d(dim, affine=True)#Affine(dim)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
         self.gamma_2 = nn.Linear(dim, dim, bias=False)
         
     def forward(self, x):
         residual = x
         #x = self.skip_add.add(residual, self.drop_path(self.gamma_1 * self.attn(self.norm1(x).transpose(1,2)).transpose(1,2)))
-        x = self.skip_add.add(residual, self.drop_path(self.gamma_1(self.attn(self.norm1(x).transpose(1,2)).transpose(1,2))))
+        x = self.skip_add.add(residual, self.drop_path(self.gamma_1(self.attn(self.norm1(x.transpose(1,2)).transpose(1,2).transpose(1,2)).transpose(1,2))))
         
         residual = x
         #x = self.skip_add.add(residual, self.drop_path(self.gamma_2 * self.mlp(self.norm2(x))))
-        x = self.skip_add.add(residual, self.drop_path(self.gamma_2(self.mlp(self.norm2(x)))))
+        x = self.skip_add.add(residual, self.drop_path(self.gamma_2(self.mlp(self.norm2(x.transpose(1,2)).transpose(1,2)))))
         return x 
 
 
@@ -68,7 +68,7 @@ class resmlp_models(nn.Module):
             for i in range(depth)])
 
 
-        self.norm = Affine(embed_dim)
+        self.norm = nn.BatchNorm1d(embed_dim, affine=True)#Affine(embed_dim)
 
         self.feature_info = [dict(num_chs=embed_dim, reduction=0, module='head')]
         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -100,7 +100,7 @@ class resmlp_models(nn.Module):
         for i, blk in enumerate(self.blocks):
             x = blk(x)
 
-        x = self.norm(x)
+        x = self.norm(x.transpose(1,2)).transpose(1,2)
         x = x.mean(dim=1).reshape(B,1,-1)
 
         return x[:, 0]
@@ -111,7 +111,7 @@ class resmlp_models(nn.Module):
         return x 
   
 @register_model
-def resmlp_24(pretrained=False, **kwargs):
+def resmlp_24_norm(pretrained=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
