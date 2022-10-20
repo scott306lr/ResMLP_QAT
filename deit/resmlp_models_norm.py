@@ -21,22 +21,25 @@ class Affine(nn.Module):
 
     def forward(self, x):
         return self.alpha * x + self.beta    
+
+def Affine(dim):
+    return nn.Linear(dim, dim)
     
 class layers_scale_mlp_blocks(nn.Module):
 
     def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU,init_values=1e-4,num_patches = 196):
         super().__init__()
-        self.norm1 = nn.BatchNorm1d(num_patches)
+        self.norm1 = nn.BatchNorm1d(dim, affine=True) #Affine(dim)
         self.attn = nn.Linear(num_patches, num_patches)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = nn.BatchNorm1d(num_patches)
+        self.norm2 = nn.BatchNorm1d(dim, affine=True) #Affine(dim)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
-        self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-        self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
+        self.gamma_1 = nn.Linear(dim, dim, bias=False) #nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
+        self.gamma_2 = nn.Linear(dim, dim, bias=False) #nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
 
     def forward(self, x):
-        x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x).transpose(1,2)).transpose(1,2))
-        x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
+        x = x + self.drop_path(self.gamma_1(self.attn(self.norm1(x.transpose(1,2)).transpose(1,2).transpose(1,2)).transpose(1,2)))
+        x = x + self.drop_path(self.gamma_2(self.mlp(self.norm2(x.transpose(1,2)).transpose(1,2))))
         return x 
 
 
@@ -53,7 +56,7 @@ class resmlp_models(nn.Module):
         self.num_features = self.embed_dim = embed_dim  
 
         self.patch_embed = Patch_layer(
-                img_size=img_size, patch_size=patch_size, in_chans=int(in_chans), embed_dim=embed_dim)
+                img_size=img_size, patch_size=patch_size, in_chans=int(in_chans), embed_dim=embed_dim,)
         num_patches = self.patch_embed.num_patches
         dpr = [drop_path_rate for i in range(depth)]
 
@@ -65,7 +68,7 @@ class resmlp_models(nn.Module):
             for i in range(depth)])
 
 
-        self.norm = nn.BatchNorm1d(num_patches)#Affine(embed_dim)
+        self.norm = nn.BatchNorm1d(embed_dim, affine=True)
 
 
 
@@ -99,7 +102,7 @@ class resmlp_models(nn.Module):
         for i , blk in enumerate(self.blocks):
             x  = blk(x)
 
-        x = self.norm(x)
+        x = self.norm(x.transpose(1,2)).transpose(1,2)
         x = x.mean(dim=1).reshape(B,1,-1)
 
         return x[:, 0]
@@ -138,25 +141,31 @@ def resmlp_24(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwa
         init_scale=1e-5,**kwargs)
     model.default_cfg = _cfg()
     if pretrained:
-        if dist:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dist.pth"
-        elif dino:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dino.pth"
-        else:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_no_dist.pth"
-        checkpoint = torch.hub.load_state_dict_from_url(
-            url=url_path,
-            map_location="cpu", check_hash=True
-        )
+        # if dist:
+        #   url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dist.pth"
+        # elif dino:
+        #   url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dino.pth"
+        # else:
+        #   url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_no_dist.pth"
+        # checkpoint = torch.hub.load_state_dict_from_url(
+        #     url=url_path,
+        #     map_location="cpu", check_hash=True
+        # )
 
+        
+        checkpoint = torch.load("../ResMLP_S24_ReLU_fp32_80.602.pth", map_location='cpu')
         modified_dict = {}
         for key, value in checkpoint.items():
-            if 'alpha' in key: continue
-            if 'beta' in key: continue
+            # if 'alpha' in key: continue
+            # if 'beta' in key: continue
+            if 'norm' in key: continue
+            #     if "weight" in key: continue
+            #     if "bias" in key: continue
+            #     #if 'gamma' in key: continue
             modified_dict[key] = value
         checkpoint = modified_dict
-            
         model.load_state_dict(checkpoint, strict=False)
+        
     return model
   
 @register_model
