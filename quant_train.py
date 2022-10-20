@@ -9,7 +9,7 @@ import logging
 import warnings
 
 import torch
-torch.manual_seed(0) # FIX random sampler on training data
+torch.manual_seed(0) #  FIX random sampler on training data 
 
 import torch.nn as nn
 import torch.nn.parallel
