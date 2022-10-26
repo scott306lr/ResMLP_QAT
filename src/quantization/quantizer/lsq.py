@@ -57,14 +57,16 @@ class LinearLSQ(Module):
         if self.training:
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
-            g = 1.0 / math.sqrt(self.linear.weight.numel() * Qp)
+            g = 1.0 / math.sqrt(torch.count_nonzero(self.linear.weight) * Qp)
             # requant inputs
             x_q = x / a_s
             
             # initialize scale on first input
-            if self.training and self.init_state == 0:
+            if self.init_state == 0:
                 y = self.linear.weight.abs()
-                init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
+                std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+                # init_scale = torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
+                init_scale = 2*mean / math.sqrt(Qp)
                 self.scale.data.copy_(init_scale)
                 self.init_state.fill_(1)
 
@@ -72,7 +74,7 @@ class LinearLSQ(Module):
             w_s = grad_scale(self.scale, g)
             b_s = w_s * a_s
 
-            print("Linear: ", self.linear.weight, self.linear.bias)
+            # print("Linear: ", self.linear.weight, self.linear.bias)
             # quantize parameters, then calculate
             self.w_int = round_pass((self.linear.weight / w_s).clamp(Qn, Qp))
             self.b_int = round_pass((self.linear.bias / b_s).clamp(bQn, bQp)) if self.has_bias else None
@@ -82,7 +84,7 @@ class LinearLSQ(Module):
             return F.linear(x, self.w_int, self.b_int), None
 
 class LinearBNLSQ(Module):
-    def __init__(self, bn, weight_bit=8, bias_bit=32, training=True):
+    def __init__(self, bn, weight_bit=8, bias_bit=32, training=True, batch_init=20):
         super(LinearBNLSQ, self).__init__()
         self.has_bias = (bn.bias is not None)
         self.weight_bit = weight_bit
@@ -90,6 +92,7 @@ class LinearBNLSQ(Module):
         self.training = training
         self.set_param(bn)
         self.scale = Parameter(torch.Tensor(1))
+        self.batch_init = batch_init
         self.register_buffer('init_state', torch.zeros(1))
 
     def __repr__(self):
@@ -113,7 +116,7 @@ class LinearBNLSQ(Module):
         if self.training:
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
-            g = 1.0 / math.sqrt(self.bn.weight.numel() * Qp)
+            g = 1.0 / math.sqrt(torch.count_nonzero(self.bn.weight) * Qp)
             # requant inputs
             x_q = x / a_s
 
@@ -121,19 +124,29 @@ class LinearBNLSQ(Module):
             batch_var = torch.var(x, dim=(0, 1))
 
             # update mean and variance in running stats
-            # self.bn.running_mean = self.bn.running_mean.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_mean
-            # self.bn.running_var = self.bn.running_var.detach() * self.bn.momentum + (1 - self.bn.momentum) * batch_var
+            self.bn.running_mean = self.bn.running_mean * (1 - self.bn.momentum) +  batch_mean * self.bn.momentum
+            self.bn.running_var = self.bn.running_var * (1 - self.bn.momentum) + batch_mean * self.bn.momentum
 
             output_factor = self.bn.weight / torch.sqrt(batch_var + self.bn.eps)
             weight = torch.diag(output_factor)
             bias = - output_factor * batch_mean + self.bn.bias
-            
+
             # initialize scale on first input
-            if self.training and self.init_state == 0:
+            if self.init_state == 0:
                 y = weight.abs()
-                init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
-                self.scale.data.copy_(init_scale)
-                self.init_state.fill_(1)
+                std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+                init_scale = 2*mean / math.sqrt(Qp)
+                # init_scale = torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
+                self.scale.data = init_scale
+                self.init_state += 1
+
+            elif self.init_state < self.batch_init:
+                y = weight.abs()
+                std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+                init_scale = 2*mean / math.sqrt(Qp)
+                #init_scale = torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
+                self.scale.data = 0.9*self.scale.data + 0.1*init_scale
+                self.init_state += 1
 
             # gives scale a lsq gradient
             w_s = grad_scale(self.scale, g)
@@ -184,14 +197,17 @@ class ConvLSQ(Module):
         if self.training:
             Qn, Qp = signed_minmax(self.weight_bit)
             bQn, bQp = signed_minmax(self.bias_bit)
-            g = 1.0 / math.sqrt(self.conv.weight.numel() * Qp)
+            g = 1.0 / math.sqrt(torch.count_nonzero(self.conv.weight) * Qp)
             # requant inputs
             x_q = x / a_s
 
             # initialize scale on first input
-            if self.training and self.init_state == 0:
+            if self.init_state == 0:
                 y = self.conv.weight.abs()
-                init_scale = 2 * y[y.nonzero(as_tuple=True)].mean() / math.sqrt(Qp)
+                std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+                init_scale = 2*mean / math.sqrt(Qp)
+                
+                # init_scale = torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
                 self.scale.data.copy_(init_scale)   
                 self.init_state.fill_(1)
 
@@ -208,12 +224,13 @@ class ConvLSQ(Module):
             return F.conv2d(x, self.w_int, self.b_int, self.conv.stride, self.conv.padding, self.conv.dilation, self.conv.groups), None
 
 class ActLSQ(Module):
-    def __init__(self, to_bit=8, mult_bit=16, training=True):
+    def __init__(self, to_bit=8, mult_bit=16, training=True, batch_init=20):
         super(ActLSQ, self).__init__()
         self.to_bit = to_bit
         self.mult_bit = mult_bit
         self.training = training
         self.scale = Parameter(torch.Tensor(1))
+        self.batch_init = batch_init
         self.register_buffer('init_state', torch.zeros(1))
         self.register_buffer('s', torch.ones(1, requires_grad=False))
         self.register_buffer('mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
@@ -224,8 +241,11 @@ class ActLSQ(Module):
         s = f"({s} to_bit={self.to_bit}, mult_bit={self.mult_bit}, from_fp32={self.from_fp32}, training={self.training}, ReLU_clip={self.ReLU_clip})"
         return s
 
-    def get_scales(self):
-        return [self.s]
+    def get_scales(self, name):
+        return [
+            (f"{name}_s", self.s),
+            (f"{name}_inf_scale", self.mult / 2**self.shift)
+        ]
 
     def set_training(self, set=True):
         self.training = set
@@ -239,11 +259,19 @@ class ActLSQ(Module):
             x_q = x / a_s if (a_s != None) else x
 
             # initialize scale on first input
-            if self.training and self.init_state == 0:
-                init_scale = (x.abs().max()*2)/(Qp-Qn)
-                # init_scale = x.abs().mean() / math.sqrt(Qp)
-                self.scale.data.copy_(init_scale)
-                self.init_state.fill_(1)
+            if self.init_state == 0:
+                y = x.detach().abs()
+                # init_scale = (y.max()*2)/(Qp-Qn)
+                init_scale = y.mean()*2 / math.sqrt(Qp)
+                self.scale.data = init_scale
+                self.init_state += 1
+
+            elif self.init_state < self.batch_init:
+                y = x.detach().abs()
+                # init_scale = (y.max()*2)/(Qp-Qn)
+                init_scale = y.mean()*2 / math.sqrt(Qp)
+                self.scale.data = 0.9*self.scale.data + 0.1*init_scale
+                self.init_state += 1
 
             # gives scale a lsq gradient
             scale = grad_scale(self.scale, g)
@@ -253,17 +281,19 @@ class ActLSQ(Module):
             # then quantize sum
             if a_s == None:
                 self.s, (self.mult, self.shift) = dyadic_scale(scale, self.mult_bit)
-                x_round = round_pass((x_q / self.s + 0.5).clamp(Qn, Qp))
-                # x_round = grad_scale(x_round, 0.1)
+                x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
+                # x_round = round_pass((x_q / self.s + 0.5).clamp(Qn, Qp))
                 return x_round * self.s, self.s
             else:
                 self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
-                x_round = round_pass((x_q / self.s + 0.5).clamp(Qn, Qp))
+                x_round = round_pass((x_q / self.s).clamp(Qn, Qp))
+                # x_round = round_pass((x_q / self.s + 0.5).clamp(Qn, Qp))
                 return x_round * self.s * a_s, self.s * a_s
 
         else:
             # quantize sum
-            x_round = round_pass((x / self.s + 0.5).clamp(Qn, Qp))
+            x_round = round_pass((x / self.s).clamp(Qn, Qp))
+            # x_round = round_pass((x / self.s + 0.5).clamp(Qn, Qp))
             # x_round = (
             #     torch.bitwise_right_shift(
             #         x.type(torch.int64)*self.mult + 1, 
@@ -274,7 +304,7 @@ class ActLSQ(Module):
             return x_round, None
 
 class ResActLSQ(Module):
-    def __init__(self, from_bit=32, to_bit=8, mult_bit=16, training=True, to_fp32=False):
+    def __init__(self, from_bit=32, to_bit=8, mult_bit=16, training=True, to_fp32=False, batch_init=20):
         super(ResActLSQ, self).__init__()
         self.from_bit = from_bit
         self.to_bit = to_bit
@@ -282,11 +312,12 @@ class ResActLSQ(Module):
         self.training = training
         self.to_fp32 = to_fp32
         self.scale = Parameter(torch.Tensor(1))
+        self.batch_init = batch_init
         self.register_buffer('init_state', torch.zeros(1))
-        self.register_buffer('align_s', torch.ones(1, requires_grad=False))
+        self.register_buffer('align_int', torch.ones(1, requires_grad=False))
+        #self.register_buffer('align_mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
+        #self.register_buffer('align_shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
         self.register_buffer('s', torch.ones(1, requires_grad=False))
-        self.register_buffer('align_mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
-        self.register_buffer('align_shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
         self.register_buffer('mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
         self.register_buffer('shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
 
@@ -295,8 +326,14 @@ class ResActLSQ(Module):
         s = f"({s} to_bit={self.to_bit}, mult_bit={self.mult_bit}, from_fp32={self.from_fp32}, training={self.training}, ReLU_clip={self.ReLU_clip})"
         return s
 
-    def get_scales(self):
-        return [self.align_s, self.s]
+    def get_scales(self, name):
+        return [
+            (f"{name}_align_inf_scale", self.align_int),
+            #(f"{name}_align_int_scale", self.align_mult / 2**self.align_shift),
+            #(f"{name}_align_int_scale", self.align_mult / 2**self.align_shift),
+            (f"{name}_s", self.s),
+            (f"{name}_inf_scale", self.mult / 2**self.shift),
+        ]
 
     def set_training(self, set=True):
         self.training = set
@@ -313,20 +350,31 @@ class ResActLSQ(Module):
 
             # align residual input and quantize
             # ! shift should be as same as rescale's
-            self.align_s, (self.align_mult, self.align_shift) = dyadic_scale(a_s/res_a_s, 8) 
-            res_x_align = round_pass((res_x_q / self.align_s + 0.5).clamp(rQn, rQp))
+            #self.align_s, (self.align_mult, self.align_shift) = dyadic_scale(a_s/res_a_s, 8) 
+            self.align_int = round_pass(res_a_s/a_s)
+            res_x_align = round_pass((res_x_q * self.align_int).clamp(rQn, rQp))
+            # res_x_align = round_pass((res_x_q / self.align_s).clamp(rQn, rQp))
+            # res_x_align = round_pass((res_x_q / self.align_s + 0.5).clamp(rQn, rQp))
             
             # obtain sum
             mix_x_q = x_q + res_x_align
             
             # initialize scale on first input
-            if self.training and self.init_state == 0:
+            if self.init_state == 0:
                 mix_x = mix_x_q * a_s
-                init_scale = (mix_x.abs().max()*2)/(Qp-Qn)
-                # init_scale = mix_x.abs().mean() / math.sqrt(Qp)
-                # init_scale = mix_x.abs().mean() / math.sqrt(Qp)
-                self.scale.data.copy_(init_scale)
-                self.init_state.fill_(1)
+                y = mix_x.detach().abs()
+                # init_scale = (y.max()*2)/(Qp-Qn)
+                init_scale = y.mean()*2 / math.sqrt(Qp)
+                self.scale.data = init_scale
+                self.init_state += 1
+
+            elif self.init_state < self.batch_init:
+                mix_x = mix_x_q * a_s
+                y = mix_x.detach().abs()
+                # init_scale = (y.max()*2)/(Qp-Qn)
+                init_scale = y.mean()*2 / math.sqrt(Qp)
+                self.scale.data = 0.9*self.scale.data + 0.1*init_scale
+                self.init_state += 1
 
             # gives scale a lsq gradient
             scale = grad_scale(self.scale, g)
@@ -340,7 +388,9 @@ class ResActLSQ(Module):
 
         else:
             # align residual input
-            res_x_align = round_pass((res_x / self.align_s + 0.5).clamp(rQn, rQp))
+            res_x_align = round_pass((res_x * self.align_int).clamp(rQn, rQp))
+            # res_x_align = round_pass((res_x / self.align_s).clamp(rQn, rQp))
+            # res_x_align = round_pass((res_x / self.align_s + 0.5).clamp(rQn, rQp))
             # res_x_align = (
             #     torch.bitwise_right_shift(
             #         res_x.type(torch.int64)*self.align_mult + 1, 
@@ -353,6 +403,7 @@ class ResActLSQ(Module):
 
             # quantize sum
             mix_x_round = round_pass((mix_x / self.s).clamp(Qn, Qp))
+            # mix_x_round = round_pass((mix_x / self.s+0.5).clamp(Qn, Qp))
             # mix_x_round = (
             #     torch.bitwise_right_shift(
             #         mix_x.type(torch.int64)*self.mult + 1, 

@@ -119,5 +119,5 @@ def resmlp_24(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
 
     if pretrained:
-        model.load_state_dict(torch.load("703.pth")["model"])
+        model.load_state_dict(torch.load("ResMLP_S24_ReLU_fp32_80.602.pth"))
     return model
