@@ -9,7 +9,7 @@ import logging
 import warnings
 
 import torch
-torch.manual_seed(0) # FIX random sampler on training data
+torch.manual_seed(0) #  FIX random sampler on training data 
 
 import torch.nn as nn
 import torch.nn.parallel
@@ -161,8 +161,8 @@ parser.add_argument('--wandb',
                     help='if set to true, log with wandb')
 best_acc1 = 0
 
-arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_v2': resmlp_24_v2}
-quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_v2': q_resmlp_v2}
+arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24_v2}
+quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2}
 
 args = parser.parse_args()
 if not os.path.exists(args.save_path):
@@ -462,15 +462,15 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             progress.display(i)
             if args.wandb:
                 to_log = {
-                    "train_loss": loss.item(), 
-                    "train_acc1": acc1[0], 
-                    "train_acc5": acc5[0]
+                    "train/train_loss": loss.item(), 
+                    "train/train_acc1": acc1[0], 
+                    "train/train_acc5": acc5[0]
                 }
 
                 scales = model.get_scales()
-                for i, scale in enumerate(scales):
+                for scale in scales:
                     # to_log[f"train_quant/align_{i}"] = scale[0]
-                    to_log[f"train_quant/scale_{i}"] = scale.item()
+                    to_log[f"train_scales/{scale[0]}"] = scale[1].item()
                 wandb.log(to_log)
 
 
@@ -545,9 +545,9 @@ def train_kd(train_loader, model, teacher, criterion, optimizer, epoch, val_load
                 }
 
                 scales = model.get_scales()
-                for i, scale in enumerate(scales):
-                    to_log[f"train_quant/scale_{i}"] = scale
-                wandb.log(to_log)
+                # for i, scale in enumerate(scales):
+                #     to_log[f"train_quant/scale_{i}"] = scale
+                # wandb.log(to_log)
 
         if i % ((dataset_length // (
                 args.batch_size * args.evaluate_times)) + 2) == 0 and i > 0 and args.evaluate_times > 0:

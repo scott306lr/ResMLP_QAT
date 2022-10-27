@@ -119,5 +119,5 @@ def resmlp_24_norm(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
 
     if pretrained:
-        model.load_state_dict(torch.load("703.pth")["model"])
+        model.load_state_dict(torch.load("771.pth")["model"])
     return model

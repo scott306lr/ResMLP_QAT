@@ -34,8 +34,9 @@ class QPatchEmbed(nn.Module):
         return x, a_s
 
 class Q_Mlp(nn.Module):
-    def __init__(self, mlp):
+    def __init__(self, mlp, layer):
         super(Q_Mlp, self).__init__()
+        self.layer = layer
         self.set_param(mlp)
 
     def set_param(self, mlp):
@@ -47,8 +48,8 @@ class Q_Mlp(nn.Module):
     
     def get_scales(self):
         scales = []
-        scales += self.act1.get_scales()
-        scales += self.act2.get_scales()
+        scales += self.act1.get_scales(f"L{self.layer}_Act5")
+        scales += self.act2.get_scales(f"L{self.layer}_Act6")
         return scales
     
     def forward(self, x, a_s=None):
@@ -68,7 +69,7 @@ class QLayer_Block(nn.Module):
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
-        self.norm1 = LinearLSQ(block.norm1)
+        self.norm1 = LinearBNLSQ(block.norm1)
         self.act1 = ActLSQ()
 
         self.attn = LinearLSQ(block.attn)
@@ -77,10 +78,10 @@ class QLayer_Block(nn.Module):
         self.gamma_1 = LinearLSQ(block.gamma_1)
         self.add_1 = ResActLSQ(to_bit=self.res_to_bit)
 
-        self.norm2 = LinearLSQ(block.norm2)
+        self.norm2 = LinearBNLSQ(block.norm2)
         self.act3 = ActLSQ()
 
-        self.mlp = Q_Mlp(block.mlp)
+        self.mlp = Q_Mlp(block.mlp, layer)
 
         self.gamma_2 = LinearLSQ(block.gamma_2)
 
@@ -95,7 +96,7 @@ class QLayer_Block(nn.Module):
         scales += self.act2.get_scales(f"L{self.layer}_Act2")
         scales += self.add_1.get_scales(f"L{self.layer}_Act3")
         scales += self.act3.get_scales(f"L{self.layer}_Act4")
-        scales += self.add_2.get_scales(f"L{self.layer}_Act5")
+        scales += self.add_2.get_scales(f"L{self.layer}_Act7")
         return scales
    
     # ! this implementation only works for per-tensor (transpose)
@@ -161,7 +162,7 @@ class Q_ResMLP24(nn.Module):
             x, a_s = blk(x, a_s)
    
         #! all fp32 below
-        x = self.norm(x)
+        x = self.norm(x.transpose(1, 2)).transpose(1, 2)
         x = x.mean(dim=1).reshape(B, 1, -1)
         x = x[:, 0]
         x = self.head(x)
@@ -169,6 +170,6 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp(model):
+def q_resmlp_norm(model):
     net = Q_ResMLP24(model)
     return net
