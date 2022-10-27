@@ -90,7 +90,7 @@ def act_dist(model, start, end, show_layers=None, name="Activation Distribution 
 
 def scale_plot(model, start, end, show_layers=None, name="Activation Distribution from Gamma_1/Gamma_2 for Each Layer", ax=None):
     model_layers = []
-    for i in range(0, 24):
+    for i in range(start, 24):
         todo_layer = model.blocks[i]
         model_layers.append(get_linear_layers(todo_layer, specify_names=show_layers, prefix=f'{i}-')) # cross-channel sublayer only
     
