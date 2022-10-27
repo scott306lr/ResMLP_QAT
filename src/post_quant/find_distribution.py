@@ -66,6 +66,8 @@ def scale_func(org_val, output):
         "scale"  : calc_quant_scale(min_val, max_val, 8)
     }
 
+from ..model_analysis.utils import simulate_input
+
 def find_layers_scale(model, model_layers):
     layers_scale = {}
 
@@ -73,11 +75,13 @@ def find_layers_scale(model, model_layers):
     hook_handler = HookHandler()
     hook_handler.create_apply_hook(scale_func, layers_scale, model_layers)
 
-    print("Loading a small piece of training data...")
-    data_loader = getTrainData(dataset='imagenet', path="E:\datasets\imagenet", batch_size=32, data_percentage=0.001)
+    # print("Loading a small piece of training data...")
+    # data_loader = getTrainData(dataset='imagenet', path="E:\datasets\imagenet", batch_size=32, data_percentage=0.001)
     
     print("Calibrating...")
-    calibrate(data_loader, model)
+    # calibrate(data_loader, model)
+    x = simulate_input()
+    model(x)
     
     print('Removing hooks...')
     hook_handler.remove_hook()
