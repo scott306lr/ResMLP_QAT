@@ -145,7 +145,7 @@ class LinearBNLSQ(Module):
                 # init_scale = 2*mean / math.sqrt(Qp)
                 init_scale = torch.max(y) / Qp
                 # init_scale = torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
-                self.scale.data = init_scale
+                self.scale.data.copy_(init_scale)  
                 self.init_state += 1
 
             # elif self.init_state < self.batch_init:
@@ -248,7 +248,7 @@ class ActLSQ(Module):
 
     def __repr__(self):
         s = super(ActLSQ, self).__repr__()
-        s = f"({s} to_bit={self.to_bit}, mult_bit={self.mult_bit}, from_fp32={self.from_fp32}, training={self.training}, ReLU_clip={self.ReLU_clip})"
+        s = f"({s} to_bit={self.to_bit}, mult_bit={self.mult_bit}, training={self.training})"
         return s
 
     def get_scales(self, name):
@@ -335,7 +335,7 @@ class ResActLSQ(Module):
 
     def __repr__(self):
         s = super(ResActLSQ, self).__repr__()
-        s = f"({s} to_bit={self.to_bit}, mult_bit={self.mult_bit}, from_fp32={self.from_fp32}, training={self.training}, ReLU_clip={self.ReLU_clip})"
+        s = f"({s} from_bit={self.from_bit}, to_bit={self.to_bit}, mult_bit={self.mult_bit}, training={self.training})"
         return s
 
     def get_scales(self, name):
