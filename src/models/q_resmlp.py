@@ -47,8 +47,8 @@ class Q_Mlp(nn.Module):
     
     def get_scales(self):
         scales = []
-        scales += self.act1.get_scales()
-        scales += self.act2.get_scales()
+        scales += self.act1.get_scales(f"L{self.layer}_Act5")
+        scales += self.act2.get_scales(f"L{self.layer}_Act6")
         return scales
     
     def forward(self, x, a_s=None):
@@ -95,7 +95,7 @@ class QLayer_Block(nn.Module):
         scales += self.act2.get_scales(f"L{self.layer}_Act2")
         scales += self.add_1.get_scales(f"L{self.layer}_Act3")
         scales += self.act3.get_scales(f"L{self.layer}_Act4")
-        scales += self.add_2.get_scales(f"L{self.layer}_Act5")
+        scales += self.add_2.get_scales(f"L{self.layer}_Act7")
         return scales
    
     # ! this implementation only works for per-tensor (transpose)
