@@ -264,7 +264,7 @@ def main_worker(gpu, ngpus_per_node, args):
     
     #logging.info(model)
 
-    if args.resume and args.resume_quantize:
+    if args.resume:# and args.resume_quantize:
         if os.path.isfile(args.resume):
             logging.info("=> loading quantized checkpoint '{}'".format(args.resume))
             # checkpoint = torch.load(args.resume)['state_dict']                                                                                                                                                                                                                                                                                                                                                                                                                          

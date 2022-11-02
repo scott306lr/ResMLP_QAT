@@ -21,6 +21,7 @@ class QPatchEmbed(nn.Module):
     
     def get_scales(self):
         scales = []
+        scales += self.proj.get_scales("PatchEmbed_Conv")
         scales += self.act.get_scales("PatchEmbed_Act")
         return scales
 
@@ -48,6 +49,8 @@ class Q_Mlp(nn.Module):
     
     def get_scales(self):
         scales = []
+        scales += self.fc1.get_scales(f"L{self.layer}_L5")
+        scales += self.fc2.get_scales(f"L{self.layer}_L6")
         scales += self.act1.get_scales(f"L{self.layer}_Act5")
         scales += self.act2.get_scales(f"L{self.layer}_Act6")
         return scales
@@ -92,6 +95,12 @@ class QLayer_Block(nn.Module):
 
     def get_scales(self):
         scales = []
+        scales += self.norm1.get_scales(f"L{self.layer}_L1")
+        scales += self.attn.get_scales(f"L{self.layer}_L2")
+        scales += self.gamma_1.get_scales(f"L{self.layer}_L3")
+        scales += self.norm2.get_scales(f"L{self.layer}_L4")
+        scales += self.gamma_2.get_scales(f"L{self.layer}_L7")
+
         scales += self.act1.get_scales(f"L{self.layer}_Act1")
         scales += self.act2.get_scales(f"L{self.layer}_Act2")
         scales += self.add_1.get_scales(f"L{self.layer}_Act3")
@@ -143,7 +152,8 @@ class Q_ResMLP24(nn.Module):
 
     def get_scales(self):
         scales = []
-        # scales += self.quant_patch.get_scales()
+        scales += self.quant_input.get_scales(f"Input_Act")
+        scales += self.quant_patch.get_scales()
 
         for i, blk in enumerate(self.blocks):
             # if i >= ALL_FP_LAYER-1 and i <= ALL_FP_LAYER+1 : 
