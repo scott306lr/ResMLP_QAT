@@ -21,7 +21,7 @@ def dyadic_scale(scale: torch.Tensor, mult_bit):
     return d_scale.detach() - scale.detach() + scale, (m, e)
 
 def round_pass(x: torch.Tensor):
-    y = (x + 0.000001).round()
+    y = (x).round()
     y_grad = x
     return y.detach() - y_grad.detach() + y_grad
 
@@ -35,7 +35,7 @@ class LinearLSQ(Module):
         self.set_param(linear)
         self.scale = Parameter(torch.Tensor(1))
         self.register_buffer('init_state', torch.zeros(1))
-        self.register_buffer('SW', torch.ones(1, requires_grad=False, dtype=torch.int8)) # for analysis
+        # self.register_buffer('SW', torch.ones(1, requires_grad=False, dtype=torch.int8)) # for analysis
 
     def __repr__(self):
         s = super(LinearLSQ, self).__repr__()
@@ -45,7 +45,7 @@ class LinearLSQ(Module):
     
     def get_scales(self, name):
         return [
-            (f"{name}_SW", self.SW),
+            # (f"{name}_SW", self.SW),
         ]
 
     def set_param(self, linear):
@@ -80,7 +80,7 @@ class LinearLSQ(Module):
             # gives scale a lsq gradient
             w_s = grad_scale(self.scale, g)
             b_s = w_s * a_s
-            self.SW = b_s
+            # self.SW = b_s
 
             # print("Linear: ", self.linear.weight, self.linear.bias)
             # quantize parameters, then calculate
@@ -102,7 +102,7 @@ class LinearBNLSQ(Module):
         self.scale = Parameter(torch.Tensor(1))
         self.batch_init = batch_init
         self.register_buffer('init_state', torch.zeros(1))
-        self.register_buffer('SW', torch.ones(1, requires_grad=False, dtype=torch.int8)) # for analysis
+        # self.register_buffer('SW', torch.ones(1, requires_grad=False, dtype=torch.int8)) # for analysis
 
         output_factor = bn.weight / torch.sqrt(bn.running_var + bn.eps)
         weight = torch.diag(output_factor)
@@ -118,7 +118,7 @@ class LinearBNLSQ(Module):
     
     def get_scales(self, name):
         return [
-            (f"{name}_SW", self.SW),
+            # (f"{name}_SW", self.SW),
         ]
 
     def set_param(self, bn):
@@ -173,7 +173,7 @@ class LinearBNLSQ(Module):
             # gives scale a lsq gradient
             w_s = grad_scale(self.scale, g)
             b_s = w_s * a_s
-            self.SW = b_s
+            # self.SW = b_s
 
             # quantize parameters, then calculate
             self.w_int = round_pass((self.weight / w_s).clamp(Qn, Qp))
@@ -195,7 +195,7 @@ class ConvLSQ(Module):
         self.set_param(conv)
         self.scale = Parameter(torch.Tensor(1))
         self.register_buffer('init_state', torch.zeros(1))
-        self.register_buffer('SW', torch.ones(1, requires_grad=False, dtype=torch.int8)) # for analysis
+        # self.register_buffer('SW', torch.ones(1, requires_grad=False, dtype=torch.int8)) # for analysis
 
     def __repr__(self):
         s = super(ConvLSQ, self).__repr__()
@@ -205,7 +205,7 @@ class ConvLSQ(Module):
     
     def get_scales(self, name):
         return [
-            (f"{name}_SW", self.SW),
+            # (f"{name}_SW", self.SW),
         ]
 
     def set_param(self, conv):
@@ -244,7 +244,7 @@ class ConvLSQ(Module):
             # gives scale a lsq gradient
             w_s = grad_scale(self.scale, g)
             b_s = w_s * a_s
-            self.SW = b_s
+            # self.SW = b_s
 
             # quantize parameters, then calculate
             self.w_int = round_pass((self.conv.weight / w_s).clamp(Qn, Qp))
@@ -274,8 +274,8 @@ class ActLSQ(Module):
 
     def get_scales(self, name):
         return [
-            # (f"{name}_s", self.s),
-            (f"{name}_SA", 1/self.s),
+            (f"rescale/{name}_rescale", self.s),
+            # (f"{name}_SA", 1/self.s),
             (f"{name}_inf_scale", self.mult / 2**self.shift)
         ]
 
@@ -293,7 +293,11 @@ class ActLSQ(Module):
             # initialize scale on first input
             if self.init_state == 0:
                 y = x.detach().abs()
-                init_scale = torch.max(y) / Qp
+                if a_s == None:
+                    init_scale = y.mean()*2 / math.sqrt(Qp)
+                else:
+                    init_scale = torch.max(y) / Qp
+                # init_scale = torch.max(y) / Qp
                 # init_scale = y.mean()*2 / math.sqrt(Qp)
                 # init_scale = torch.tensor(1)
                 self.scale.data.copy_(init_scale)
@@ -301,7 +305,11 @@ class ActLSQ(Module):
 
             elif self.init_state < self.batch_init:
                 y = x.detach().abs()
-                init_scale = torch.max(y) / Qp
+                # init_scale = torch.max(y) / Qp
+                if a_s == None:
+                    init_scale = y.mean()*2 / math.sqrt(Qp)
+                else:
+                    init_scale = torch.max(y) / Qp
                 # init_scale = y.mean()*2 / math.sqrt(Qp)
                 # init_scale = torch.tensor(1)
                 self.scale.data = 0.9*self.scale.data + 0.1*init_scale
@@ -344,6 +352,9 @@ class ResActLSQ(Module):
         self.register_buffer('s', torch.ones(1, requires_grad=False))
         self.register_buffer('mult', torch.ones(1, requires_grad=False, dtype=torch.int64))
         self.register_buffer('shift', torch.ones(1, requires_grad=False, dtype=torch.int64))
+        self.register_buffer('S_cur', torch.ones(1, requires_grad=False))
+        self.register_buffer('S_res', torch.ones(1, requires_grad=False))
+        
 
     def __repr__(self):
         s = super(ResActLSQ, self).__repr__()
@@ -352,9 +363,11 @@ class ResActLSQ(Module):
 
     def get_scales(self, name):
         return [
+            (f"align/{name}_S_cur", self.S_cur),
+            (f"align/{name}_S_res", self.S_res),
+            (f"rescale/{name}_rescale", self.s),
             (f"{name}_align_inf_scale", self.align_int),
-            (f"{name}_s", self.s),
-            (f"{name}_inf_scale", self.mult / 2**self.shift),
+            # (f"{name}_inf_scale", self.mult / 2**self.shift),
         ]
 
     def set_training(self, set=True):
@@ -373,6 +386,8 @@ class ResActLSQ(Module):
             # align residual input and quantize
             # ! shift should be as same as rescale's
             #self.align_s, (self.align_mult, self.align_shift) = dyadic_scale(a_s/res_a_s, 8) 
+            self.S_res = res_a_s
+            self.S_cur = a_s
             self.align_int = round_pass((res_a_s/a_s))#round_pass((res_a_s/a_s).clamp(Qn, Qp))
             res_x_align = round_pass((res_x_q * self.align_int).clamp(rQn, rQp))
             

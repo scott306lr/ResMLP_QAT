@@ -21,7 +21,7 @@ class QPatchEmbed(nn.Module):
     
     def get_scales(self):
         scales = []
-        scales += self.proj.get_scales("PatchEmbed_Conv")
+        # scales += self.proj.get_scales("PatchEmbed_Conv")
         scales += self.act.get_scales("PatchEmbed_Act")
         return scales
 
@@ -95,17 +95,20 @@ class QLayer_Block(nn.Module):
 
     def get_scales(self):
         scales = []
-        scales += self.norm1.get_scales(f"L{self.layer}_L1")
-        scales += self.attn.get_scales(f"L{self.layer}_L2")
-        scales += self.gamma_1.get_scales(f"L{self.layer}_L3")
-        scales += self.norm2.get_scales(f"L{self.layer}_L4")
-        scales += self.gamma_2.get_scales(f"L{self.layer}_L7")
+        # scales += self.norm1.get_scales(f"L{self.layer}_L1")
+        # scales += self.attn.get_scales(f"L{self.layer}_L2")
+        # scales += self.gamma_1.get_scales(f"L{self.layer}_L3")
+        # scales += self.norm2.get_scales(f"L{self.layer}_L4")
+        # scales += self.gamma_2.get_scales(f"L{self.layer}_L7")
 
-        scales += self.act1.get_scales(f"L{self.layer}_Act1")
-        scales += self.act2.get_scales(f"L{self.layer}_Act2")
-        scales += self.add_1.get_scales(f"L{self.layer}_Act3")
-        scales += self.act3.get_scales(f"L{self.layer}_Act4")
-        scales += self.add_2.get_scales(f"L{self.layer}_Act7")
+        # scales += self.act1.get_scales(f"L{self.layer}_Act1")
+        # scales += self.act2.get_scales(f"L{self.layer}_Act2")
+        # scales += self.add_1.get_scales(f"L{self.layer}_Act3")
+        # scales += self.act3.get_scales(f"L{self.layer}_Act4")
+        # scales += self.add_2.get_scales(f"L{self.layer}_Act7")
+
+        scales += self.add_1.get_scales(f"L{self.layer}_Add1")
+        scales += self.add_2.get_scales(f"L{self.layer}_Add2")
         return scales
    
     # ! this implementation only works for per-tensor (transpose)
@@ -152,7 +155,7 @@ class Q_ResMLP24(nn.Module):
 
     def get_scales(self):
         scales = []
-        scales += self.quant_input.get_scales(f"Input_Act")
+        # scales += self.quant_input.get_scales(f"Input_Act")
         scales += self.quant_patch.get_scales()
 
         for i, blk in enumerate(self.blocks):
