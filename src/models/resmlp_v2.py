@@ -19,29 +19,40 @@ __all__ = [
 def Affine(dim):
     return nn.Linear(dim, dim)
 
+class Inner(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(384))
+        self.bias = nn.Parameter(torch.zeros(196,384))
+
+    def forward(self, x):
+        return self.weight * x + self.bias
+    
+class Outer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(196,196))
+
+    def forward(self, x):
+        return self.weight @ x
+
     
 class layers_scale_mlp_blocks(nn.Module):
 
     def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4, num_patches = 196):
         super().__init__()
-        self.norm1 = Affine(dim)
-        self.attn = nn.Linear(num_patches, num_patches)
-        self.gamma_1 = nn.Linear(dim, dim, bias=False)
+        self.inner = Inner()
+        self.outer = Outer()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.skip_add = nn.quantized.FloatFunctional()
-
-        # self.norm2 = Affine(dim)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
-        # self.gamma_2 = nn.Linear(dim, dim, bias=False)
+
         
     def forward(self, x):
         residual = x
-        #x = self.skip_add.add(residual, self.drop_path(self.gamma_1 * self.attn(self.norm1(x).transpose(1,2)).transpose(1,2)))
-        x = self.skip_add.add(residual, self.drop_path(self.gamma_1(self.attn(self.norm1(x).transpose(1,2)).transpose(1,2))))
+        x = torch.add(residual, self.drop_path(self.outer(self.inner(x))))
         
         residual = x
-        #x = self.skip_add.add(residual, self.drop_path(self.gamma_2 * self.mlp(self.norm2(x))))
-        x = self.skip_add.add(residual, self.drop_path(self.mlp(x)))
+        x = torch.add(residual, self.drop_path(self.mlp(x)))
         return x 
 
 
