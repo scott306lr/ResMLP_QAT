@@ -1,21 +1,18 @@
+# Copyright (c) 2015-present, Facebook, Inc.
+# All rights reserved.
 import torch
 import torch.nn as nn
+from functools import partial
+
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
+
 
 __all__ = [
     'resmlp_24_v2'
 ]
 
-# class Affine(nn.Module):
-#     def __init__(self, dim):
-#         super().__init__()
-#         self.alpha = nn.Parameter(torch.ones(dim))
-#         self.beta = nn.Parameter(torch.zeros(dim))
-
-#     def forward(self, x):
-#         return self.alpha * x + self.beta 
 def Affine(dim):
     return nn.Linear(dim, dim)
 
@@ -35,18 +32,16 @@ class Outer(nn.Module):
 
     def forward(self, x):
         return self.weight @ x
-
     
 class layers_scale_mlp_blocks(nn.Module):
 
-    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4, num_patches = 196):
+    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.GELU,init_values=1e-4,num_patches = 196):
         super().__init__()
         self.inner = Inner()
         self.outer = Outer()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
 
-        
     def forward(self, x):
         residual = x
         x = torch.add(residual, self.drop_path(self.outer(self.inner(x))))
@@ -56,9 +51,10 @@ class layers_scale_mlp_blocks(nn.Module):
         return x 
 
 
+
 class resmlp_models(nn.Module):
 
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12, drop_rate=0.,
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,drop_rate=0.,
                  Patch_layer=PatchEmbed,act_layer=nn.ReLU,
                 drop_path_rate=0.0,init_scale=1e-4):
         super().__init__()
@@ -80,6 +76,8 @@ class resmlp_models(nn.Module):
 
 
         self.norm = Affine(embed_dim)
+
+
 
         self.feature_info = [dict(num_chs=embed_dim, reduction=0, module='head')]
         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -108,8 +106,8 @@ class resmlp_models(nn.Module):
 
         x = self.patch_embed(x)
 
-        for i, blk in enumerate(self.blocks):
-            x = blk(x)
+        for i , blk in enumerate(self.blocks):
+            x  = blk(x)
 
         x = self.norm(x)
         x = x.mean(dim=1).reshape(B,1,-1)
@@ -122,13 +120,13 @@ class resmlp_models(nn.Module):
         return x 
   
 @register_model
-def resmlp_24_v2(pretrained=False, **kwargs):
+def resmlp_24_v2(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
         init_scale=1e-5,**kwargs)
     model.default_cfg = _cfg()
-
     if pretrained:
-        model.load_state_dict(torch.load("fuse_S24_ReLU.pth"))
+        checkpoint = torch.load("ResMLP_v2_ReLU.pth", map_location='cpu')
+        model.load_state_dict(checkpoint)
     return model

@@ -25,7 +25,7 @@ from losses import DistillationLoss
 from samplers import RASampler
 from augment import new_data_aug_generator
 
-import resmlp_models_norm
+import resmlp_model_norm
 
 import utils
 

@@ -357,7 +357,7 @@ class ResActLSQ(Module):
         return [
             (f"align/{name}_S_cur", self.S_cur),
             (f"align/{name}_S_res", self.S_res),
-            (f"align/{name}_rescale", self.s),
+            (f"rescale/{name}_rescale", self.s),
             (f"{name}_align_inf_scale", self.align_int),
             # (f"{name}_inf_scale", self.mult / 2**self.shift),
         ]
