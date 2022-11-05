@@ -21,42 +21,20 @@ def round_pass(x: torch.Tensor):
     y_grad = x
     return y.detach() - y_grad.detach() + y_grad
 
-class LinearLSQ(Module):
-    def __init__(self, linear: nn.Linear, weight_bit=8, bias_bit=32, training=True):
-        super(LinearLSQ, self).__init__()
-        self.weight_bit = weight_bit
-        self.bias_bit = bias_bit
+class _BaseLSQ(Module):
+    def __init__(self, to_bit=8, training=True):
+        super().__init__()
+        self.Qn, self.Qp = signed_minmax(to_bit)
+        self.to_bit = to_bit
+        self.scale = Parameter(torch.Tensor(1))
+        self.g = None
         self.training = training
-        self.inherit_layer(linear)
-        self.init_scaling_params()
 
-    def __repr__(self):
-        s = super(LinearLSQ, self).__repr__()
-        s = f'{s}({self.in_features}, {self.out_features}, weight_bit={self.weight_bit}, bias_bit={self.bias_bit})'
-        return s
-    
+    def extra_repr(self):
+        return f"training={self.training} to_bit={self.to_bit}"
+
     def set_training(self, set=True):
         self.training = set
-
-    def inherit_layer(self, linear: nn.Linear):
-        self.in_features = linear.in_features
-        self.out_features = linear.out_features
-
-        self.weight = Parameter(linear.weight.data)
-        self.register_buffer('w_int', torch.zeros_like(linear.weight.data))
-        if linear.bias is not None:
-            self.bias = Parameter(linear.bias.data)
-            self.register_buffer('b_int', torch.zeros_like(linear.bias.data))
-        else:
-            self.register_parameter('bias', None)
-            self.register_buffer('b_int', None)
-    
-    def init_scaling_params(self):
-        self.Qn, self.Qp = signed_minmax(self.weight_bit)
-        self.bQn, self.bQp = signed_minmax(self.bias_bit)
-        self.g = 1.0 / math.sqrt(torch.count_nonzero(self.weight) * self.Qp)
-        self.scale = Parameter(torch.Tensor(1))
-        self.register_buffer('init_state', torch.zeros(1))
 
     def update_scale(self, x: torch.Tensor, mode='minmax', momentum=1):
         y = x.detach().abs()
@@ -71,6 +49,36 @@ class LinearLSQ(Module):
             raise ValueError('Invalid mode')
 
         self.scale.data = (1-momentum)*self.scale.data + momentum*init_scale
+        
+    def forward(self, x):
+        raise NotImplementedError
+
+class LinearLSQ(_BaseLSQ):
+    def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
+        # super(LinearLSQ, self).__init__(to_bit, training)
+        _BaseLSQ.__init__(self, to_bit, training)
+        self.inherit_layer(linear)
+        self.bias_bit = bias_bit
+        self.bQn, self.bQp = signed_minmax(self.bias_bit)
+        self.register_buffer('init_state', torch.zeros(1))
+
+    def __repr__(self):
+        s = super(LinearLSQ, self).__repr__()
+        s = f'{s}({self.in_features}, {self.out_features}, bias_bit={self.bias_bit})'
+        return s
+
+    def inherit_layer(self, linear: nn.Linear):
+        self.in_features = linear.in_features
+        self.out_features = linear.out_features
+        self.weight = Parameter(linear.weight.data)
+        self.register_buffer('w_int', torch.zeros_like(linear.weight.data))
+        if linear.bias is not None:
+            self.bias = Parameter(linear.bias.data)
+            self.register_buffer('b_int', torch.zeros_like(linear.bias.data))
+        else:
+            self.register_parameter('bias', None)
+            self.register_buffer('b_int', None)
+        self.g = 1.0 / math.sqrt(self.weight.numel() * self.Qp)
 
     def inference(self, x: torch.Tensor):
         return F.linear(x, self.w_int, self.b_int)
@@ -95,13 +103,12 @@ class LinearLSQ(Module):
                 self.b_int = round_pass((self.bias / b_s).clamp(self.bQn, self.bQp))
             
             return self.inference(x_q) * b_s, b_s
-
         else:
-            return self.inference(x_q), None
+            return self.inference(x), None
 
 class LinearBNLSQ(LinearLSQ):
-    def __init__(self, bn: nn.BatchNorm1d, weight_bit=8, bias_bit=32, training=True):
-        LinearLSQ.__init__(self, bn, weight_bit, bias_bit, training)
+    def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
+        LinearLSQ.__init__(self, bn, bias_bit, to_bit, training)
     
     def inherit_layer(self, bn: nn.BatchNorm1d):
         self.in_features = self.num_features
@@ -112,12 +119,13 @@ class LinearBNLSQ(LinearLSQ):
         bias = - output_factor * bn.running_mean + bn.bias
         self.weight = Parameter(weight)
         self.bias = Parameter(bias)
-        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
-        self.register_buffer('b_int', torch.zeros_like(self.bias.data))
+        self.register_buffer('w_int', torch.zeros_like(self.weight.data, dtype=torch.int8))
+        self.register_buffer('b_int', torch.zeros_like(self.bias.data, dtype=torch.int8))
+        self.g = 1.0 / math.sqrt(self.weight.numel() * self.Qp)
 
 class ConvLSQ(LinearLSQ):
-    def __init__(self, conv: nn.Conv2d, weight_bit=8, bias_bit=32, training=True):
-        LinearLSQ.__init__(self, conv, weight_bit, bias_bit, training)
+    def __init__(self, conv: nn.Conv2d, bias_bit=32, to_bit=8, training=True):
+        LinearLSQ.__init__(self, conv, bias_bit, to_bit, training)
     
     def __repr__(self):
         s = super(ConvLSQ, self).__repr__()
@@ -134,13 +142,14 @@ class ConvLSQ(LinearLSQ):
         self.padding_mode = conv.padding_mode
 
         self.weight = Parameter(conv.weight.data)
-        self.register_buffer('w_int', torch.zeros_like(conv.weight.data))
+        self.register_buffer('w_int', torch.zeros_like(conv.weight.data, dtype=torch.int8))
         if conv.bias is not None:
             self.bias = Parameter(conv.bias.data)
-            self.register_buffer('b_int', torch.zeros_like(conv.bias.data))
+            self.register_buffer('b_int', torch.zeros_like(conv.bias.data, dtype=torch.int8))
         else:
             self.register_parameter('bias', None)
             self.register_buffer('b_int', None)
+        self.g = 1.0 / math.sqrt(self.weight.numel() * self.Qp)
 
     def inference(self, x: torch.Tensor):
         return F.conv2d(x, self.w_int, self.b_int, self.stride, self.padding, self.dilation, self.groups)
