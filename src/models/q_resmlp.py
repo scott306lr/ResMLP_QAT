@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import copy
 
-from ..quantization.quantizer.lsq_org import *
+from ..quantization.quantizer.lsq import *
 # from ..quantization.quantizer.lsq import *
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
@@ -89,9 +89,9 @@ class QLayer_Block(nn.Module):
         self.gamma_2 = LinearLSQ(block.gamma_2)
 
         if layer == 24-1:
-            self.add_2 = ResActLSQ(to_bit=self.res_to_bit, to_fp32=True) # dequant output back to fp
+            self.add_2 = ResActLSQ(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
         else:
-            self.add_2 = ResActLSQ(to_bit=self.res_to_bit, to_fp32=False)
+            self.add_2 = ResActLSQ(to_bit=self.res_to_bit, return_fp=False)
 
     def get_scales(self):
         scales = []
