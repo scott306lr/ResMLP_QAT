@@ -11,6 +11,7 @@ def get_linear_layers(model, specify_names=None, prefix=""):
         if isinstance(module, nn.Linear) or isinstance(module, QLinear):
             linear_layers.append((f'{prefix}{name}', module))
     return linear_layers
+    
 
 class HookHandler():
     def __init__(self):

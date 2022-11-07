@@ -19,22 +19,37 @@ __all__ = [
 def Affine(dim):
     return nn.Linear(dim, dim)
 
+class Inner(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(384, 384))
+        self.bias = nn.Parameter(torch.zeros(196,384))
+
+    def forward(self, x):
+        return x @ self.weight  + self.bias
+    
+class Outer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(196,196))
+
+    def forward(self, x):
+        return self.weight @ x
+
     
 class layers_scale_mlp_blocks(nn.Module):
 
     def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4, num_patches = 196):
         super().__init__()
-        self.norm1 = Affine(dim)
-        self.attn = nn.Linear(num_patches, num_patches)
-        self.gamma_1 = nn.Linear(dim, dim, bias=False)
+        self.inner = Inner()
+        self.outer = Outer()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.skip_add = nn.quantized.FloatFunctional()
-
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
+
         
     def forward(self, x):
         residual = x
-        x = self.skip_add.add(residual, self.drop_path(self.gamma_1(self.attn(self.norm1(x).transpose(1,2)).transpose(1,2))))
+        x = torch.add(residual, self.drop_path(self.outer(self.inner(x))))
         
         residual = x
         x = torch.add(residual, self.drop_path(self.mlp(x)))
@@ -79,6 +94,8 @@ class resmlp_models(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+
+
     def get_classifier(self):
         return self.head
 
@@ -113,5 +130,5 @@ def resmlp_24_v2(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
 
     if pretrained:
-        model.load_state_dict(torch.load("ResMLP_S24_ReLU_fp32_80.602.pth"))
+        model.load_state_dict(torch.load("fuse_S24_ReLU.pth"))
     return model
