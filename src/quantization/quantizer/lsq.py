@@ -21,35 +21,72 @@ def round_pass(x: torch.Tensor):
     y_grad = x
     return y.detach() - y_grad.detach() + y_grad
 
-# TODO: replace scale finding with a LSQ_Observer Module
-# def get_observer_method(mode, Qn, Qp):
-#     if mode == "minmax":
-#         def observer(x: torch.Tensor):
-#             y = x.detach()
-#             return torch.max(y) / Qp
+def get_scale_func(mode, Qn, Qp):
+    if mode == "minmax":
+        def observer(x: torch.Tensor):
+            y = x.detach().abs()
+            return torch.max(y) / Qp
+        return observer
 
-#     elif mode == "lsq":
-#         def observer(x: torch.Tensor):
-#             y = x.detach()
-#             mean = torch.mean(y[y.nonzero(as_tuple=True)])
-#             return 2*mean / math.sqrt(Qp)
+    elif mode == "lsq":
+        def observer(x: torch.Tensor):
+            y = x.detach().abs()
+            mean = torch.mean(y[y.nonzero(as_tuple=True)])
+            return 2*mean / math.sqrt(Qp)
+        return observer
 
-#     elif mode == "lsq+":
-#         def observer(x: torch.Tensor):
-#             y = x.detach()
-#             std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-#             return torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
-#     else:
-#         raise NotImplementedError
-#     return observer
+    elif mode == "lsq+":
+        def observer(x: torch.Tensor):
+            y = x.detach().abs()
+            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+            return torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
+        return observer
 
-class _BaseLSQ(Module):
+    else:
+        raise NotImplementedError
+    
+class LSQObserver(Module):
+    def __init__(self, mode, Qn, Qp, calibrate_count=1, momentum=0.1):
+        super().__init__()
+        self.mode = mode
+        self.Qn = Qn
+        self.Qp = Qp
+        self.scale_func = get_scale_func(mode, Qn, Qp)
+        self.momentum = momentum
+        self.g = None
+        self.register_buffer('calibrate_count', torch.tensor(calibrate_count))
+        self.register_buffer('counter', torch.tensor(0))
+        self.register_buffer("scale", torch.tensor(1.0))
+    
+    def __repr__(self):
+        return f"LSQObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
+    
+    def init_scale_counter(self):
+        self.counter.data = 0
+
+    def get_scale(self):
+        return self.scale
+
+    def forward(self, x: torch.Tensor):
+        if self.counter < self.calibrate_count:
+            if self.counter == 0:
+                self.scale.data = self.scale_func(x)
+            else:
+                self.scale.data = (1-self.momentum)*self.scale.data + self.momentum*self.scale_func(x)
+            self.counter += 1
+        
+        if self.g is None: 
+            self.g = 1.0 / math.sqrt(x.numel() * self.Qp)
+
+        scale = grad_scale(self.scale, self.g)
+        return scale
+
+class _BaseQuant(Module):
     def __init__(self, to_bit=8, training=True):
         super().__init__()
         self.Qn, self.Qp = signed_minmax(to_bit)
         self.to_bit = to_bit
-        self.scale = Parameter(torch.Tensor(1))
-        self.g = None
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp)
         self.training = training
 
     def extra_repr(self):
@@ -57,36 +94,20 @@ class _BaseLSQ(Module):
 
     def set_training(self, set=True):
         self.training = set
-
-    def update_scale(self, x: torch.Tensor, mode='minmax', momentum=1):
-        y = x.detach().abs()
-        if mode == 'minmax':
-            init_scale = torch.max(y) / self.Qp
-        elif mode == 'lsq':
-            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-            init_scale = 2*mean / math.sqrt(self.Qp)
-        elif mode == 'lsq+':
-            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-            init_scale = torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/self.Qp
-        else:
-            raise ValueError('Invalid mode')
-
-        self.scale.data = (1-momentum)*self.scale.data + momentum*init_scale
         
     def forward(self, x, scale=None):
         raise NotImplementedError
 
-class LinearLSQ(_BaseLSQ):
+class QLinear(_BaseQuant):
     def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
         # super(LinearLSQ, self).__init__(to_bit, training)
-        _BaseLSQ.__init__(self, to_bit, training)
+        QLinear.__init__(self, to_bit, training)
         self.inherit_layer(linear)
         self.bias_bit = bias_bit
         self.bQn, self.bQp = signed_minmax(self.bias_bit)
-        self.register_buffer('init_state', torch.zeros(1))
 
     def __repr__(self):
-        s = super(LinearLSQ, self).__repr__()
+        s = super(QLinear, self).__repr__()
         s = f'{s}({self.in_features}, {self.out_features}, bias_bit={self.bias_bit})'
         return s
 
@@ -101,7 +122,6 @@ class LinearLSQ(_BaseLSQ):
         else:
             self.register_parameter('bias', None)
             self.register_buffer('b_int', None)
-        self.g = 1.0 / math.sqrt(self.weight.numel() * self.Qp)
 
     def inference(self, x: torch.Tensor):
         return F.linear(x, self.w_int, self.b_int)
@@ -112,12 +132,7 @@ class LinearLSQ(_BaseLSQ):
             x_q = x / a_s
             
             # initialize scale on first input
-            if self.init_state == 0:
-                self.update_scale(self.weight, mode='lsq')
-                self.init_state.fill_(1)
-
-            # calculate scales
-            w_s = grad_scale(self.scale, self.g) # gives scale a lsq gradient
+            w_s = self.observer(self.weight)
             b_s = w_s * a_s
 
             # quantize weights and bias
@@ -129,9 +144,9 @@ class LinearLSQ(_BaseLSQ):
         else:
             return self.inference(x), None
 
-class LinearBNLSQ(LinearLSQ):
+class QLinearBN(QLinear):
     def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
-        LinearLSQ.__init__(self, bn, bias_bit, to_bit, training)
+        QLinear.__init__(self, bn, bias_bit, to_bit, training)
     
     def inherit_layer(self, bn: nn.BatchNorm1d):
         self.in_features = bn.num_features
@@ -144,14 +159,13 @@ class LinearBNLSQ(LinearLSQ):
         self.bias = Parameter(bias)
         self.register_buffer('w_int', torch.zeros_like(self.weight.data))
         self.register_buffer('b_int', torch.zeros_like(self.bias.data))
-        self.g = 1.0 / math.sqrt(self.weight.numel() * self.Qp)
 
-class ConvLSQ(LinearLSQ):
+class QConv(QLinear):
     def __init__(self, conv: nn.Conv2d, bias_bit=32, to_bit=8, training=True):
-        LinearLSQ.__init__(self, conv, bias_bit, to_bit, training)
+        QLinear.__init__(self, conv, bias_bit, to_bit, training)
     
     def __repr__(self):
-        s = super(ConvLSQ, self).__repr__()
+        s = super(QConv, self).__repr__()
         s = f'{s}({self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, bias_bit={self.bias_bit})'
 
     def inherit_layer(self, conv: nn.Conv2d):
@@ -172,24 +186,21 @@ class ConvLSQ(LinearLSQ):
         else:
             self.register_parameter('bias', None)
             self.register_buffer('b_int', None)
-        self.g = 1.0 / math.sqrt(self.weight.numel() * self.Qp)
 
     def inference(self, x: torch.Tensor):
         return F.conv2d(x, self.w_int, self.b_int, self.stride, self.padding, self.dilation, self.groups)
 
-class ActLSQ(_BaseLSQ):
-    def __init__(self, mult_bit=16, batch_init=20, return_fp=False, to_bit=8, training=True):
-        _BaseLSQ.__init__(self, to_bit, training)
+class QAct(_BaseQuant):
+    def __init__(self, mult_bit=16, return_fp=False, to_bit=8, training=True):
+        _BaseQuant.__init__(self, to_bit, training)
         self.mult_bit = mult_bit
-        self.batch_init = batch_init
         self.return_fp = return_fp
-        self.register_buffer('init_state', torch.zeros(1))
-        self.register_buffer('s', torch.ones(1))
+        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
         self.register_buffer('mult', torch.ones(1, dtype=torch.int64))
         self.register_buffer('shift', torch.ones(1, dtype=torch.int64))
 
     def __repr__(self):
-        s = super(ActLSQ, self).__repr__()
+        s = super(QAct, self).__repr__()
         s = f'{s}(to_bit={self.to_bit}, mult_bit={self.mult_bit})'
         return s
 
@@ -210,20 +221,8 @@ class ActLSQ(_BaseLSQ):
             x_q = x / a_s
 
             # initialize scale on first input
-            if self.init_state == 0:
-                # self.update_scale(x, mode='lsq', momentum=1)
-                self.update_scale(x, mode='minmax', momentum=1)
-                self.init_state += 1
-
-            elif self.init_state < self.batch_init:
-                # self.update_scale(x, mode='lsq', momentum=0.1)
-                self.update_scale(x, mode='minmax', momentum=0.1)
-                self.init_state += 1
-
-            # gives scale a lsq gradient
-            if self.g is None: self.g = 1.0 / math.sqrt(x.numel() * self.Qp)
-            scale = grad_scale(self.scale, self.g)
-
+            scale = self.observer(x)
+ 
             # calculate approximate dyadic value, then quantize sum
             self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
             x_round = round_pass((x_q / self.s).clamp(self.Qn, self.Qp))
@@ -232,29 +231,28 @@ class ActLSQ(_BaseLSQ):
         else: # on inference
             x_round = torch.floor((x * self.mult / 2**self.shift)+0.5).clamp(self.Qn, self.Qp)
             if self.return_fp: # last layer, return output as fp32
-                return x_round*self.scale, self.scale
+                scale = self.observer.get_scale()
+                return x_round*scale, scale
             else:
                 return x_round, None
 
-class ResActLSQ(_BaseLSQ):
-    def __init__(self, bias_bit=32, mult_bit=16, batch_init=20, return_fp=False, to_bit=8, training=True):
-        _BaseLSQ.__init__(self, to_bit, training)
+class QResAct(_BaseQuant):
+    def __init__(self, bias_bit=32, mult_bit=16, return_fp=False, to_bit=8, training=True):
+        _BaseQuant.__init__(self, to_bit, training)
         self.bias_bit = bias_bit
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
-        self.batch_init = batch_init
         self.return_fp = return_fp
+        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
         
-        self.register_buffer('init_state', torch.zeros(1))
         self.register_buffer('align_int', torch.ones(1))
-        self.register_buffer('s', torch.ones(1))
         self.register_buffer('mult', torch.ones(1, dtype=torch.int64))
         self.register_buffer('shift', torch.ones(1, dtype=torch.int64))
         self.register_buffer('S_cur', torch.ones(1))
         self.register_buffer('S_res', torch.ones(1))
 
     def __repr__(self):
-        s = super(ResActLSQ, self).__repr__()
+        s = super(QResAct, self).__repr__()
         s = f"({s} bias_bit={self.bias_bit}, mult_bit={self.mult_bit})"
         return s
 
@@ -285,21 +283,8 @@ class ResActLSQ(_BaseLSQ):
             mix_x_q = x_q + res_x_align
             
             # initialize scale on first input
-            if self.init_state == 0:
-                mix_x = res_x + x # mix_x_q * a_s
-                # self.update_scale(mix_x, mode='lsq', momentum=1)
-                self.update_scale(mix_x, mode='minmax', momentum=1)
-                self.init_state += 1
-
-            elif self.init_state < self.batch_init:
-                mix_x = res_x + x # mix_x_q * a_s
-                # self.update_scale(mix_x, mode='lsq', momentum=0.1)
-                self.update_scale(mix_x, mode='minmax', momentum=0.1)
-                self.init_state += 1
-
-            # gives scale a lsq gradient
-            if self.g is None: self.g = 1.0 / math.sqrt(x.numel() * self.Qp)
-            scale = grad_scale(self.scale, self.g)
+            mix_x = res_x + x # mix_x_q * a_s
+            scale = self.observer(mix_x)
 
             # calculate approximate dyadic value and quantize
             self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
@@ -317,14 +302,15 @@ class ResActLSQ(_BaseLSQ):
             # quantize sum
             mix_x_round = torch.floor((mix_x / self.s)+0.5).clamp(self.Qn, self.Qp)
             if self.return_fp: # last layer, return output as fp32
-                return mix_x_round*self.scale, None
+                scale = self.observer.get_scale()
+                return mix_x_round*scale, None
             else:
                 return mix_x_round, None
 
 def set_training(model, set=True):
     cnt = 0
     for n, m in model.named_modules():
-        if issubclass(type(m), _BaseLSQ):
+        if issubclass(type(m), _BaseQuant):
             cnt += 1
             m.set_training(set)
     print(f"set {cnt} layers to {set}")

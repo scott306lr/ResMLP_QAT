@@ -16,9 +16,9 @@ class QPatchEmbed(nn.Module):
         self.set_param(patch, to_bit)
 
     def set_param(self, patch, to_bit):
-        self.proj = ConvLSQ(patch.proj)
+        self.proj = QConv(patch.proj)
         self.norm = nn.Identity()
-        self.act  = ActLSQ(to_bit=to_bit)
+        self.act  = QAct(to_bit=to_bit)
     
     def get_scales(self):
         scales = []
@@ -41,11 +41,11 @@ class Q_Mlp(nn.Module):
         self.set_param(mlp)
 
     def set_param(self, mlp):
-        self.fc1 = LinearLSQ(mlp.fc1)
+        self.fc1 = (mlp.fc1)
         self.relu = torch.nn.ReLU()
-        self.act1 = ActLSQ()
-        self.fc2 = LinearLSQ(mlp.fc2)
-        self.act2 = ActLSQ()
+        self.act1 = QAct()
+        self.fc2 = (mlp.fc2)
+        self.act2 = QAct()
     
     def get_scales(self):
         scales = []
@@ -72,26 +72,26 @@ class QLayer_Block(nn.Module):
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
-        self.norm1 = LinearLSQ(block.norm1)
-        self.act1 = ActLSQ()
+        self.norm1 = (block.norm1)
+        self.act1 = QAct()
 
-        self.attn = LinearLSQ(block.attn)
-        self.act2 = ActLSQ()
+        self.attn = (block.attn)
+        self.act2 = QAct()
 
-        self.gamma_1 = LinearLSQ(block.gamma_1)
-        self.add_1 = ResActLSQ(to_bit=self.res_to_bit)
+        self.gamma_1 = (block.gamma_1)
+        self.add_1 = QResAct(to_bit=self.res_to_bit)
 
-        self.norm2 = LinearLSQ(block.norm2)
-        self.act3 = ActLSQ()
+        self.norm2 = (block.norm2)
+        self.act3 = QAct()
 
         self.mlp = Q_Mlp(block.mlp)
 
-        self.gamma_2 = LinearLSQ(block.gamma_2)
+        self.gamma_2 = (block.gamma_2)
 
         if layer == 24-1:
-            self.add_2 = ResActLSQ(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
+            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
         else:
-            self.add_2 = ResActLSQ(to_bit=self.res_to_bit, return_fp=False)
+            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=False)
 
     def get_scales(self):
         scales = []
@@ -147,7 +147,7 @@ class Q_ResMLP24(nn.Module):
     """
     def __init__(self, model):
         super().__init__()
-        self.quant_input = ActLSQ(to_bit=8)
+        self.quant_input = QAct(to_bit=8)
         self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=RES_RESCALE_BIT)
         self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
         self.norm = model.norm#QLinear(model.norm) #model.norm

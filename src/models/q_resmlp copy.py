@@ -41,10 +41,10 @@ class Q_Mlp(nn.Module):
         self.set_param(mlp)
 
     def set_param(self, mlp):
-        self.fc1 = LinearLSQ(mlp.fc1)
+        self.fc1 = QLinear(mlp.fc1)
         self.relu = torch.nn.ReLU()
         self.act1 = ActLSQ()
-        self.fc2 = LinearLSQ(mlp.fc2)
+        self.fc2 = QLinear(mlp.fc2)
         self.act2 = ActLSQ()
     
     def get_scales(self):
@@ -72,21 +72,21 @@ class QLayer_Block(nn.Module):
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
-        self.norm1 = LinearLSQ(block.norm1)
+        self.norm1 = QLinear(block.norm1)
         self.act1 = ActLSQ()
 
-        self.attn = LinearLSQ(block.attn)
+        self.attn = QLinear(block.attn)
         self.act2 = ActLSQ()
 
-        self.gamma_1 = LinearLSQ(block.gamma_1)
+        self.gamma_1 = QLinear(block.gamma_1)
         self.add_1 = ResActLSQ(to_bit=self.res_to_bit)
 
-        self.norm2 = LinearLSQ(block.norm2)
+        self.norm2 = QLinear(block.norm2)
         self.act3 = ActLSQ()
 
         self.mlp = Q_Mlp(block.mlp)
 
-        self.gamma_2 = LinearLSQ(block.gamma_2)
+        self.gamma_2 = QLinear(block.gamma_2)
 
         if layer == 24-1:
             self.add_2 = ResActLSQ(to_bit=self.res_to_bit, to_fp32=True) # dequant output back to fp
