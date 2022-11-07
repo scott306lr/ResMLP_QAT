@@ -81,7 +81,7 @@ class LSQObserver(Module):
         scale = grad_scale(self.scale, self.g)
         return scale
 
-class _BaseQuant(Module):
+class _QBase(Module):
     def __init__(self, to_bit=8, training=True):
         super().__init__()
         self.Qn, self.Qp = signed_minmax(to_bit)
@@ -98,10 +98,9 @@ class _BaseQuant(Module):
     def forward(self, x, scale=None):
         raise NotImplementedError
 
-class QLinear(_BaseQuant):
+class QLinear(_QBase):
     def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
-        # super(LinearLSQ, self).__init__(to_bit, training)
-        QLinear.__init__(self, to_bit, training)
+        _QBase.__init__(self, to_bit, training)
         self.inherit_layer(linear)
         self.bias_bit = bias_bit
         self.bQn, self.bQp = signed_minmax(self.bias_bit)
@@ -190,9 +189,9 @@ class QConv(QLinear):
     def inference(self, x: torch.Tensor):
         return F.conv2d(x, self.w_int, self.b_int, self.stride, self.padding, self.dilation, self.groups)
 
-class QAct(_BaseQuant):
+class QAct(_QBase):
     def __init__(self, mult_bit=16, return_fp=False, to_bit=8, training=True):
-        _BaseQuant.__init__(self, to_bit, training)
+        _QBase.__init__(self, to_bit, training)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
         self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
@@ -236,9 +235,9 @@ class QAct(_BaseQuant):
             else:
                 return x_round, None
 
-class QResAct(_BaseQuant):
+class QResAct(_QBase):
     def __init__(self, bias_bit=32, mult_bit=16, return_fp=False, to_bit=8, training=True):
-        _BaseQuant.__init__(self, to_bit, training)
+        _QBase.__init__(self, to_bit, training)
         self.bias_bit = bias_bit
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
@@ -310,7 +309,7 @@ class QResAct(_BaseQuant):
 def set_training(model, set=True):
     cnt = 0
     for n, m in model.named_modules():
-        if issubclass(type(m), _BaseQuant):
+        if issubclass(type(m), _QBase):
             cnt += 1
             m.set_training(set)
     print(f"set {cnt} layers to {set}")

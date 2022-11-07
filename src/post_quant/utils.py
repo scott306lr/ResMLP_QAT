@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 
-from ..quantization.quantizer.lsq import ActLSQ
+from ..quantization.quantizer.lsq import QLinear
 
 def get_linear_layers(model, specify_names=None, prefix=""):
     linear_layers = []
     for name, module in model.named_modules():
         if (specify_names is not None) and (name not in specify_names): 
             continue
-        if isinstance(module, nn.Linear) or isinstance(module, ActLSQ):
+        if isinstance(module, nn.Linear) or isinstance(module, QLinear):
             linear_layers.append((f'{prefix}{name}', module))
     return linear_layers
 

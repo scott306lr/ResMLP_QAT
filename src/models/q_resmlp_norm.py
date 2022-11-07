@@ -3,6 +3,7 @@ import torch.nn as nn
 import copy
 
 from ..quantization.quantizer.lsq import *
+# from ..quantization.quantizer.lsq import *
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
@@ -35,9 +36,8 @@ class QPatchEmbed(nn.Module):
         return x, a_s
 
 class Q_Mlp(nn.Module):
-    def __init__(self, mlp, layer):
+    def __init__(self, mlp):
         super(Q_Mlp, self).__init__()
-        self.layer = layer
         self.set_param(mlp)
 
     def set_param(self, mlp):
@@ -49,10 +49,10 @@ class Q_Mlp(nn.Module):
     
     def get_scales(self):
         scales = []
-        scales += self.fc1.get_scales(f"L{self.layer}_L5")
-        scales += self.fc2.get_scales(f"L{self.layer}_L6")
-        scales += self.act1.get_scales(f"L{self.layer}_Act5")
-        scales += self.act2.get_scales(f"L{self.layer}_Act6")
+        # scales += self.fc1.get_scales(f"L{self.layer}_L5")
+        # scales += self.fc2.get_scales(f"L{self.layer}_L6")
+        # scales += self.act1.get_scales(f"L{self.layer}_Act5")
+        # scales += self.act2.get_scales(f"L{self.layer}_Act6")
         return scales
     
     def forward(self, x, a_s=None):
@@ -84,7 +84,7 @@ class QLayer_Block(nn.Module):
         self.norm2 = QLinearBN(block.norm2)
         self.act3 = QAct()
 
-        self.mlp = Q_Mlp(block.mlp, layer)
+        self.mlp = Q_Mlp(block.mlp)
 
         self.gamma_2 = QLinear(block.gamma_2)
 
@@ -175,7 +175,7 @@ class Q_ResMLP24(nn.Module):
             x, a_s = blk(x, a_s)
    
         #! all fp32 below
-        x = self.norm(x.transpose(1, 2)).transpose(1, 2)
+        x = self.norm(x)
         x = x.mean(dim=1).reshape(B, 1, -1)
         x = x[:, 0]
         x = self.head(x)
@@ -183,6 +183,6 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp_norm(model):
+def q_resmlp(model):
     net = Q_ResMLP24(model)
     return net
