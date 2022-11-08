@@ -53,10 +53,10 @@ class LSQObserver(Module):
         self.Qp = Qp
         self.scale_func = get_scale_func(mode, Qn, Qp)
         self.momentum = momentum
+        self.scale = Parameter(torch.Tensor(1))
         self.g = None
         self.register_buffer('calibrate_count', torch.tensor(calibrate_count))
         self.register_buffer('counter', torch.tensor(0))
-        self.register_buffer("scale", torch.tensor(1.0))
     
     def __repr__(self):
         return f"LSQObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
@@ -229,7 +229,7 @@ class QAct(_QBase):
 
         else: # on inference
             x_round = torch.floor((x * self.mult / 2**self.shift)+0.5).clamp(self.Qn, self.Qp)
-            if self.return_fp: # last layer, return output as fp32
+            if self.return_fp: # last layer, return output as fp32 
                 scale = self.observer.get_scale()
                 return x_round*scale, scale
             else:
