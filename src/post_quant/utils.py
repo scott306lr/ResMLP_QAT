@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from ..quantization.quantizer.lsq import QLinear
+from ..quantization.quantizer.lsq import QLinear, _QBase
 
 def get_linear_layers(model, specify_names=None, prefix=""):
     linear_layers = []
@@ -11,6 +11,16 @@ def get_linear_layers(model, specify_names=None, prefix=""):
         if isinstance(module, nn.Linear) or isinstance(module, QLinear):
             linear_layers.append((f'{prefix}{name}', module))
     return linear_layers
+
+def get_quant_layers(model, specify_names=None, prefix=""):
+    qlayers = []
+    for name, module in model.named_modules():
+        if (specify_names is not None) and (name not in specify_names): 
+            continue
+        if issubclass(type(module), _QBase):
+            # print(f'{prefix}{name}')
+            qlayers.append((f'{prefix}{name}', module))
+    return qlayers
     
 
 class HookHandler():

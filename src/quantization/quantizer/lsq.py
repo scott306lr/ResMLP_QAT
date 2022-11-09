@@ -53,7 +53,7 @@ class LSQObserver(Module):
         self.Qp = Qp
         self.scale_func = get_scale_func(mode, Qn, Qp)
         self.momentum = momentum
-        self.scale = Parameter(torch.Tensor(1))
+        self.scale = Parameter(torch.tensor(0.))
         self.g = None
         self.register_buffer('calibrate_count', torch.tensor(calibrate_count))
         self.register_buffer('counter', torch.tensor(0))
@@ -62,7 +62,7 @@ class LSQObserver(Module):
         return f"LSQObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
     
     def init_scale_counter(self):
-        self.counter.data = 0
+        self.counter.data = torch.tensor(0)
 
     def get_scale(self):
         return self.scale
@@ -70,7 +70,9 @@ class LSQObserver(Module):
     def forward(self, x: torch.Tensor):
         if self.counter < self.calibrate_count:
             if self.counter == 0:
+                prev = self.scale.data
                 self.scale.data = self.scale_func(x)
+                print(f"\nprev: {prev}, cur: {self.scale.data}")
             else:
                 self.scale.data = (1-self.momentum)*self.scale.data + self.momentum*self.scale_func(x)
             self.counter += 1
@@ -86,7 +88,7 @@ class _QBase(Module):
         super().__init__()
         self.Qn, self.Qp = signed_minmax(to_bit)
         self.to_bit = to_bit
-        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp)
+        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp)
         self.training = training
 
     def extra_repr(self):
@@ -194,9 +196,9 @@ class QAct(_QBase):
         _QBase.__init__(self, to_bit, training)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
-        self.register_buffer('mult', torch.ones(1, dtype=torch.int64))
-        self.register_buffer('shift', torch.ones(1, dtype=torch.int64))
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
+        self.register_buffer('mult', torch.tensor(0))
+        self.register_buffer('shift', torch.tensor(0))
 
     def __repr__(self):
         s = super(QAct, self).__repr__()
@@ -242,13 +244,13 @@ class QResAct(_QBase):
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
         
-        self.register_buffer('align_int', torch.ones(1))
-        self.register_buffer('mult', torch.ones(1, dtype=torch.int64))
-        self.register_buffer('shift', torch.ones(1, dtype=torch.int64))
-        self.register_buffer('S_cur', torch.ones(1))
-        self.register_buffer('S_res', torch.ones(1))
+        self.register_buffer('align_int', torch.tensor(0))
+        self.register_buffer('mult', torch.tensor(0))
+        self.register_buffer('shift', torch.tensor(0))
+        self.register_buffer('S_cur', torch.tensor(0))
+        self.register_buffer('S_res', torch.tensor(0))
 
     def __repr__(self):
         s = super(QResAct, self).__repr__()
@@ -312,4 +314,12 @@ def set_training(model, set=True):
         if issubclass(type(m), _QBase):
             cnt += 1
             m.set_training(set)
-    print(f"set {cnt} layers to {set}")
+    print(f"Set {cnt} layers to {set}.")
+
+def init_scale_counter(model):
+    cnt = 0
+    for n, m in model.named_modules():
+        if issubclass(type(m), LSQObserver):
+            cnt += 1
+            m.init_scale_counter()
+    print(f"Reset {cnt} counters.")

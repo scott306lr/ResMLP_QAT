@@ -166,7 +166,7 @@ def getTrainData(dataset='imagenet',
 
         return train_loader
 
-def calibrate(val_loader, model):
+def calibrate(val_loader, model, eval=True):
     batch_time = AverageMeter('Time', ':6.3f')
     progress = ProgressMeter(
         len(val_loader),
@@ -174,7 +174,12 @@ def calibrate(val_loader, model):
         prefix='Calibrate: ')
 
     # switch to evaluate mode
-    model.eval()
+    model.cuda()
+    if eval:
+        model.eval()
+    else:
+        model.train()
+
     with torch.no_grad():
         end = time.time()
         for i, (images, target) in enumerate(val_loader):

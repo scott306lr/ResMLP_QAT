@@ -25,6 +25,7 @@ import torchvision.datasets as datasets
 from src.data_utils import AverageMeter, ProgressMeter
 from src.quantization.quantizer.lsq import set_training
 from src.post_quant.cle import cle_for_resmlp
+from src.post_quant.rca import rca_for_resmlp
 from src.models import *
 from timm.scheduler.cosine_lr import CosineLRScheduler
 
@@ -156,6 +157,9 @@ parser.add_argument('--regular',
 parser.add_argument('--cle',
                     action='store_true',
                     help='if set to true, run cle before QAT')      
+parser.add_argument('--rca',
+                    action='store_true',
+                    help='if set to true, run rca before QAT')   
 parser.add_argument('--wandb',
                     action='store_true',
                     help='if set to true, log with wandb')
@@ -230,6 +234,12 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.cle:
         logging.info("=> Applying CLE on model")
         cle_for_resmlp(model)
+    
+
+    # TODO: rca calibration
+    # if args.rca:
+    #     logging.info("=> Applying RCA on model")
+    #     rca_for_resmlp(model)
         
 
     # if args.resume and not args.resume_quantize:
@@ -278,9 +288,13 @@ def main_worker(gpu, ngpus_per_node, args):
             #     modified_dict[modified_key] = value
             # model.load_state_dict(modified_dict, strict=False)
             # print(torch.load(args.resume)['state_dict'])
-            model.load_state_dict(torch.load(args.resume)['state_dict'], strict=False)
+            model.load_state_dict(torch.load(args.resume)['state_dict'])
         else:
             logging.info("=> no quantized checkpoint found at '{}'".format(args.resume))
+    
+    if args.rca:
+        logging.info("=> Applying RCA on model")
+        rca_for_resmlp(model)
 
     if args.gpu is not None:
         torch.cuda.set_device(args.gpu)
