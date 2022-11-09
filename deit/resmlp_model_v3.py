@@ -10,7 +10,7 @@ from timm.models.layers import trunc_normal_,  DropPath
 
 
 __all__ = [
-    'resmlp_24_v2'
+    'resmlp_24_v3'
 ]
 
 def Affine(dim):
@@ -120,7 +120,7 @@ class resmlp_models(nn.Module):
         return x 
   
 @register_model
-def resmlp_24_v2(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs):
+def resmlp_24_v3(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
