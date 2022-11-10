@@ -88,7 +88,7 @@ class _QBase(Module):
         super().__init__()
         self.Qn, self.Qp = signed_minmax(to_bit)
         self.to_bit = to_bit
-        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp)
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp)
         self.training = training
 
     def extra_repr(self):
@@ -127,6 +127,9 @@ class QLinear(_QBase):
     def inference(self, x: torch.Tensor):
         return F.linear(x, self.w_int, self.b_int)
     
+    # def forward(self, x, a_s):
+    #     return F.linear(x, self.weight, self.bias), a_s
+
     def forward(self, x, a_s):
         if self.training:
             # requant inputs
@@ -151,6 +154,9 @@ class QLinearInner(QLinear):
 
     def inference(self, x: torch.Tensor):
         return x @ self.w_int + self.b_int
+    
+    # def forward(self, x, a_s):
+    #     return x @ self.weight + self.bias, a_s
 
 class QLinearOuter(QLinear):
     def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
@@ -158,6 +164,9 @@ class QLinearOuter(QLinear):
 
     def inference(self, x: torch.Tensor):
         return self.w_int @ x
+    
+    # def forward(self, x, a_s):
+    #     return self.weight @ x, a_s
 
 class QLinearBN(QLinear):
     def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
@@ -205,6 +214,9 @@ class QConv(QLinear):
     def inference(self, x: torch.Tensor):
         return F.conv2d(x, self.w_int, self.b_int, self.stride, self.padding, self.dilation, self.groups)
 
+    # def forward(self, x, a_s):
+    #     return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups), a_s
+
 class QAct(_QBase):
     def __init__(self, mult_bit=16, return_fp=False, to_bit=8, training=True):
         _QBase.__init__(self, to_bit, training)
@@ -228,6 +240,9 @@ class QAct(_QBase):
 
     def set_training(self, set=True):
         self.training = set
+
+    # def forward(self, x, a_s):
+    #     return x, a_s
 
     def forward(self, x, a_s=None):
         if a_s == None: a_s = 1.0
@@ -282,6 +297,9 @@ class QResAct(_QBase):
     def set_training(self, set=True):
         self.training = set
 
+    # def forward(self, x, a_s=None, res_x=None, res_a_s=None):
+    #     return x+res_x, a_s
+
     def forward(self, x, a_s=None, res_x=None, res_a_s=None):
         if self.training:
             # requant inputs
@@ -321,6 +339,7 @@ class QResAct(_QBase):
                 return mix_x_round*scale, None
             else:
                 return mix_x_round, None
+    
 
 def set_training(model, set=True):
     cnt = 0
