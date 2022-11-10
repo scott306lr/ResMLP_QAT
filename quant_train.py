@@ -165,8 +165,8 @@ parser.add_argument('--wandb',
                     help='if set to true, log with wandb')
 best_acc1 = 0
 
-arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24_v2, 'q_resmlp_v3': resmlp_24_v3}
-quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2, 'q_resmlp_v3': q_resmlp_v3}
+arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24_v2}
+quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2}
 
 args = parser.parse_args()
 if not os.path.exists(args.save_path):
@@ -264,9 +264,8 @@ def main_worker(gpu, ngpus_per_node, args):
     #     else:
     #         logging.info("=> no checkpoint found at '{}'".format(args.resume))
 
-    if args.regular is False:
-        quantize_arch = quantize_arch_dict[args.arch]
-        model = quantize_arch(model)
+    quantize_arch = quantize_arch_dict[args.arch]
+    model = quantize_arch(model)
 
     print("args.batch_size", args.batch_size)
     # for name, m in model.named_modules():

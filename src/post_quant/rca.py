@@ -7,7 +7,7 @@ from ..quantization.quantizer.lsq import init_scale_counter, set_training
 
 def res_add_align(prev, prev_act, cur, add):
     #if add.align_int < 50: return
-    factor = 2#add.align_int.data# / 50
+    factor = 10#add.align_int.data# / 50
 
     cur.weight.data.mul_(factor)
     if cur.bias is not None:

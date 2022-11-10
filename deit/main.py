@@ -26,6 +26,7 @@ from samplers import RASampler
 from augment import new_data_aug_generator
 
 import resmlp_model_v3
+import fin_model
 
 import utils
 
