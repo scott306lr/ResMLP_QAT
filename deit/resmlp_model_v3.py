@@ -13,9 +13,15 @@ __all__ = [
     'resmlp_24_v3'
 ]
 
-def Affine(dim):
-    return nn.Linear(dim, dim)
+class Affine(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.alpha = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
 
+    def forward(self, x):
+        return self.alpha * x + self.beta 
+        
 class Inner(nn.Module):
     def __init__(self):
         super().__init__()
@@ -127,6 +133,15 @@ def resmlp_24_v3(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **
         init_scale=1e-5,**kwargs)
     model.default_cfg = _cfg()
     if pretrained:
-        checkpoint = torch.load("ResMLP_v2_ReLU.pth", map_location='cpu')
+        checkpoint = torch.load("fin_S24_ReLU.pth", map_location='cpu')
+        
+        modified_ckpt={}
+        for k, v in checkpoint.items():
+            if "inner.weight" in k:
+                modified_ckpt[k] = torch.diag(v)
+            else:
+                modified_ckpt[k] = v
+        
+        checkpoint = modified_ckpt
         model.load_state_dict(checkpoint)
     return model
