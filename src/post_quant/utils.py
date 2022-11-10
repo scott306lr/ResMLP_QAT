@@ -2,13 +2,16 @@ import torch
 import torch.nn as nn
 
 from ..quantization.quantizer.lsq import QLinear, _QBase
+from ..models.resmlp_v3 import Inner, Outer
+
 
 def get_linear_layers(model, specify_names=None, prefix=""):
     linear_layers = []
     for name, module in model.named_modules():
         if (specify_names is not None) and (name not in specify_names): 
             continue
-        if isinstance(module, nn.Linear) or isinstance(module, QLinear):
+        if isinstance(module, nn.Linear) or isinstance(module, Inner) or isinstance(module, Outer) or isinstance(module, QLinear):
+            # print(f'{prefix}{name}')
             linear_layers.append((f'{prefix}{name}', module))
     return linear_layers
 
