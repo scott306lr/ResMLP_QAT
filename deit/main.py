@@ -29,6 +29,8 @@ import resmlp_model_v3
 
 import utils
 
+from src.models import q_resmlp_v3
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
@@ -275,6 +277,7 @@ def main(args):
         img_size=args.input_size
     )
 
+    model = q_resmlp_v3(model)
                     
     if args.finetune:
         if args.finetune.startswith('https'):

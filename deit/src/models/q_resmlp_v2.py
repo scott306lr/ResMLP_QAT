@@ -43,8 +43,9 @@ class Q_Mlp(nn.Module):
     def set_param(self, mlp):
         self.fc1 = QLinear(mlp.fc1)
         self.relu = torch.nn.ReLU()
-        self.act = QAct()
+        self.act1 = QAct()
         self.fc2 = QLinear(mlp.fc2)
+        self.act2 = QAct()
     
     def get_scales(self):
         scales = []
@@ -58,8 +59,9 @@ class Q_Mlp(nn.Module):
         # forward using the quantized modules
         x, a_s = self.fc1(x, a_s)
         x = self.relu(x)
-        x, a_s = self.act(x, a_s)
+        x, a_s = self.act1(x, a_s)
         x, a_s = self.fc2(x, a_s)
+        x, a_s = self.act2(x, a_s)
         return x, a_s
 
 class QLayer_Block(nn.Module):
@@ -70,13 +72,21 @@ class QLayer_Block(nn.Module):
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
-        self.inner = QLinearInner(block.inner)
-        self.act = QAct()
+        self.norm1 = QLinear(block.norm1)
+        self.act1 = QAct()
 
-        self.outer = QLinearOuter(block.outer)
+        self.attn = QLinear(block.attn)
+        self.act2 = QAct()
+
+        self.gamma_1 = QLinear(block.gamma_1)
         self.add_1 = QResAct(to_bit=self.res_to_bit)
 
+        self.norm2 = QLinear(block.norm2)
+        self.act3 = QAct()
+
         self.mlp = Q_Mlp(block.mlp)
+
+        self.gamma_2 = QLinear(block.gamma_2)
 
         if layer == 24-1:
             self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
@@ -106,15 +116,26 @@ class QLayer_Block(nn.Module):
         org_x, org_a_s = x, a_s
 
         # ----- Cross-patch sublayer ----- START
-        x, a_s = self.inner(x, a_s)
-        x, a_s = self.act(x, a_s)
-        x, a_s = self.outer(x, a_s)
+        x, a_s = self.norm1(x, a_s)
+        x, a_s = self.act1(x, a_s)
+
+        x = x.transpose(1,2)
+        x, a_s = self.attn(x, a_s)
+        x, a_s = self.act2(x, a_s)
+        x = x.transpose(1,2)
+
+        x, a_s = self.gamma_1(x, a_s)
         x, a_s = self.add_1(x, a_s, org_x, org_a_s)
         # ----- Cross-patch sublayer ----- END
-
         org_x, org_a_s = x, a_s
+        
         # ---- Cross-channel sublayer ---- START
+        x, a_s = self.norm2(x, a_s)
+        x, a_s = self.act3(x, a_s)
+
         x, a_s = self.mlp(x, a_s)
+
+        x, a_s = self.gamma_2(x, a_s)
         x, a_s = self.add_2(x, a_s, org_x, org_a_s)
         # ---- Cross-channel sublayer ---- END
         return x, a_s
@@ -131,7 +152,6 @@ class Q_ResMLP24(nn.Module):
         self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
         self.norm = model.norm#QLinear(model.norm) #model.norm
         self.head = model.head#QLinear(getattr(model, 'head'))
-        # self.org_blocks = model.blocks
 
     def get_scales(self):
         scales = []
@@ -153,12 +173,6 @@ class Q_ResMLP24(nn.Module):
 
         for i, blk in enumerate(self.blocks):
             x, a_s = blk(x, a_s)
-
-        for i in range(0, 24):
-            x, a_s = self.blocks[i](x, a_s)
-
-        # for i in range(20, 24):
-        #     x = self.org_blocks[i](x)
    
         #! all fp32 below
         x = self.norm(x)
@@ -169,6 +183,6 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp_v3(model):
+def q_resmlp(model):
     net = Q_ResMLP24(model)
     return net
