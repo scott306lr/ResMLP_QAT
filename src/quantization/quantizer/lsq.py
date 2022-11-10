@@ -222,7 +222,7 @@ class QAct(_QBase):
         _QBase.__init__(self, to_bit, training)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
+        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
 
@@ -273,7 +273,7 @@ class QResAct(_QBase):
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
+        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1)
         
         self.register_buffer('align_int', torch.tensor(0))
         self.register_buffer('mult', torch.tensor(0))

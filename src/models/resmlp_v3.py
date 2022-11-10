@@ -133,15 +133,17 @@ def resmlp_24_v3(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
 
     if pretrained:
-        checkpoint = torch.load("fin_S24_ReLU.pth", map_location='cpu')
+        # checkpoint = torch.load("fin_S24_ReLU.pth", map_location='cpu')
         
-        modified_ckpt={}
-        for k, v in checkpoint.items():
-            if "inner.weight" in k:
-                modified_ckpt[k] = torch.diag(v)
-            else:
-                modified_ckpt[k] = v
+        # modified_ckpt={}
+        # for k, v in checkpoint.items():
+        #     if "inner.weight" in k:
+        #         modified_ckpt[k] = torch.diag(v)
+        #     else:
+        #         modified_ckpt[k] = v
         
-        checkpoint = modified_ckpt
+        # checkpoint = modified_ckpt
+
+        checkpoint = torch.load("v3/807.pth", map_location='cpu')["model"]
         model.load_state_dict(checkpoint)
     return model

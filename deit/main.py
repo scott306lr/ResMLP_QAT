@@ -26,7 +26,6 @@ from samplers import RASampler
 from augment import new_data_aug_generator
 
 import resmlp_model_v3
-import fin_model
 
 import utils
 
@@ -422,7 +421,7 @@ def main(args):
         return
 
     wandb_run = None
-    if args.wandb and args.gpu == 0:
+    if args.wandb and args.gpu == 1:
         # wandb.login(key=)
         id = wandb.util.generate_id()
         wandb_run = wandb.init(
