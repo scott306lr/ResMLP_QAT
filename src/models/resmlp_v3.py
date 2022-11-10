@@ -5,33 +5,38 @@ from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
 
 __all__ = [
-    'resmlp_24_v2'
+    'resmlp_24_v3'
 ]
 
-# class Affine(nn.Module):
-#     def __init__(self, dim):
-#         super().__init__()
-#         self.alpha = nn.Parameter(torch.ones(dim))
-#         self.beta = nn.Parameter(torch.zeros(dim))
-
-#     def forward(self, x):
-#         return self.alpha * x + self.beta 
-def Affine(dim):
-    return nn.Linear(dim, dim)
-
-class Inner(nn.Module):
-    def __init__(self):
+class Affine(nn.Module):
+    def __init__(self, dim):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(384, 384))
-        self.bias = nn.Parameter(torch.zeros(196,384))
+        self.alpha = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
 
     def forward(self, x):
-        return x @ self.weight  + self.bias
+        return self.alpha * x + self.beta 
+# def Affine(dim):
+#     return nn.Linear(dim, dim)
+
+class Inner(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.ones(in_features, in_features))
+        self.bias = nn.Parameter(torch.zeros(out_features, in_features))
+
+    def forward(self, x):
+        return x @ self.weight + self.bias
     
 class Outer(nn.Module):
-    def __init__(self):
+    def __init__(self, in_features, out_features):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(196,196))
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.ones(out_features, in_features))
+        self.register_parameter('bias', None)
 
     def forward(self, x):
         return self.weight @ x
@@ -41,18 +46,18 @@ class layers_scale_mlp_blocks(nn.Module):
 
     def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4, num_patches = 196):
         super().__init__()
-        self.inner = Inner()
-        self.outer = Outer()
+        self.inner = Inner(dim, num_patches)
+        self.outer = Outer(num_patches, num_patches)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
 
         
     def forward(self, x):
         residual = x
-        x = torch.add(residual, self.drop_path(self.outer(self.inner(x))))
+        x = torch.add(residual, self.outer(self.inner(x)))
         
         residual = x
-        x = torch.add(residual, self.drop_path(self.mlp(x)))
+        x = torch.add(residual, self.mlp(x))
         return x 
 
 
@@ -94,8 +99,6 @@ class resmlp_models(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-
-
     def get_classifier(self):
         return self.head
 
@@ -122,7 +125,7 @@ class resmlp_models(nn.Module):
         return x 
   
 @register_model
-def resmlp_24_v2(pretrained=False, **kwargs):
+def resmlp_24_v3(pretrained=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
@@ -130,5 +133,8 @@ def resmlp_24_v2(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
 
     if pretrained:
-        model.load_state_dict(torch.load("fin_S24_ReLU.pth"))
+        # modified = {}
+        ckpt = torch.load("fin_S24_ReLU.pth")
+        model.load_state_dict(ckpt)
+        
     return model

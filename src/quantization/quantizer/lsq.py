@@ -145,6 +145,20 @@ class QLinear(_QBase):
         else:
             return self.inference(x), None
 
+class QLinearInner(QLinear):
+    def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
+        QLinear.__init__(self, linear, bias_bit, to_bit, training)
+
+    def inference(self, x: torch.Tensor):
+        return x @ self.w_int + self.b_int
+
+class QLinearOuter(QLinear):
+    def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
+        QLinear.__init__(self, linear, bias_bit, to_bit, training)
+
+    def inference(self, x: torch.Tensor):
+        return self.w_int @ x
+
 class QLinearBN(QLinear):
     def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, bn, bias_bit, to_bit, training)
