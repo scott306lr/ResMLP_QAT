@@ -30,6 +30,7 @@ import resmlp_model_v3
 import utils
 
 from src.models import q_resmlp_v3
+from src.post_quant.cle import cle_for_resmlp_v3
 
 
 def get_args_parser():
@@ -276,7 +277,7 @@ def main(args):
         drop_block_rate=None,
         img_size=args.input_size
     )
-
+    cle_for_resmlp_v3(model)
     model = q_resmlp_v3(model)
                     
     if args.finetune:
