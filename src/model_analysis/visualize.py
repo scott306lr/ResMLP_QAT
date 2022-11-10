@@ -49,6 +49,8 @@ def layer_dist(model, start, end, show_layers=None, type="weight", name="Distrib
                 val = m.weight
             elif type == "bias":
                 val = m.bias
+                if val is None:
+                    continue
             else: raise NameError(f'Type:{type} not found')
 
             data.append(val.detach().numpy().flatten())
