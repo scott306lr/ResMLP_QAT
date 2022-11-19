@@ -5,7 +5,7 @@ from torch.nn import Module, Parameter
 import torch.nn.functional as F
 import math
 
-from ..utils import *
+from quant_func import signed_minmax, scale_to_dyadic, dyadic_to_scale
 
 def grad_scale(x: torch.Tensor, scale: torch.Tensor):
     y = x
@@ -45,20 +45,69 @@ def get_scale_func(mode, Qn, Qp):
 
     else:
         raise NotImplementedError
-    
-class LSQObserver(Module):
-    def __init__(self, mode, Qn, Qp, calibrate_count=1, momentum=0.1, name="Observer"):
+
+## Observer Classes
+class _Observer(Module):
+    def __init__(self, Qn, Qp, mode, name="Observer"):
         super().__init__()
         self.mode = mode
+        self.scale_func = get_scale_func(mode, Qn, Qp)
         self.Qn = Qn
         self.Qp = Qp
+        self.scale = Parameter(torch.tensor(0.))
+        self.name = name
+        self.register_buffer('counter', torch.tensor(0))
+    
+    def __repr__(self):
+        return f"Observer(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp})"
+    
+    def init_scale_counter(self):
+        self.counter.data = torch.tensor(0)
+
+    def get_scale(self):
+        return self.scale
+
+    def forward(self, x: torch.Tensor):
+        raise NotImplementedError
+
+class MinmaxObserver(Module):
+    def __init__(self, Qn, Qp, mode="minmax", name="Observer", momentum=0.1):
+        _Observer(self, Qn, Qp, mode, name).__init__()
+        self.momentum = momentum
+        self.min = Qp + 1
+        self.max = Qn - 1
+        self.register_buffer('scale', torch.tensor(0))
+
+    def __repr__(self):
+        return f"MinmaxObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
+    
+    def init_scale_counter(self):
+        self.counter.data = torch.tensor(0)
+
+    def get_scale(self):
+        return self.scale
+
+    def forward(self, x: torch.Tensor):
+        if self.counter == 0:
+            y = x.detach().abs()
+            self.min, self.max = y.min(), y.max()
+            self.counter = 1
+        else:
+            y = x.detach().abs()
+            min, max = y.min(), y.max()
+            self.max = (1-self.momentum)*self.max + self.momentum*max
+            self.min = (1-self.momentum)*self.min  + self.momentum*min
+            self.scale.data = (self.max - self.min) / (self.Qp - self.Qn)
+        return self.scale
+
+class LSQObserver(Module):
+    def __init__(self, Qn, Qp, name="Observer", mode="lsq", calibrate_count=1, momentum=0.1):
+        _Observer(self, Qn, Qp, name).__init__()
+        self.mode = mode
         self.scale_func = get_scale_func(mode, Qn, Qp)
         self.momentum = momentum
-        self.scale = Parameter(torch.tensor(0.))
         self.g = None
-        self.name = name
         self.register_buffer('calibrate_count', torch.tensor(calibrate_count))
-        self.register_buffer('counter', torch.tensor(0))
     
     def __repr__(self):
         return f"LSQObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
@@ -88,6 +137,7 @@ class LSQObserver(Module):
         scale = grad_scale(self.scale, self.g)
         return scale
 
+## QAT Classes
 class _QBase(Module):
     def __init__(self, to_bit=8, training=True):
         super().__init__()
@@ -193,6 +243,150 @@ class QConv(QLinear):
     # def forward(self, x, a_s):
     #     return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups), a_s
 
+class QAct(_QBase):
+    def __init__(self, mult_bit=16, return_fp=False, to_bit=8, training=True):
+        _QBase.__init__(self, to_bit, training)
+        self.mult_bit = mult_bit
+        self.return_fp = return_fp
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
+        self.register_buffer('s', torch.tensor(0))
+        self.register_buffer('mult', torch.tensor(0))
+        self.register_buffer('shift', torch.tensor(0))
+        
+
+    def __repr__(self):
+        s = super(QAct, self).__repr__()
+        s = f'{s}(to_bit={self.to_bit}, mult_bit={self.mult_bit})'
+        return s
+
+    def get_scales(self, name):
+        return [
+            (f"{name}_inf_scale", self.mult / 2**self.shift)
+        ]
+
+    def set_training(self, set=True):
+        self.training = set
+
+    def forward(self, x, a_s=None):
+        if a_s == None: a_s = 1.0
+        if self.training:
+            # requant inputs, first layer's input will always be fp
+            x_q = x / a_s
+
+            # initialize scale on first input
+            scale = self.observer(x)
+ 
+            # calculate approximate dyadic value, then quantize sum
+            self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
+            x_round = round_pass((x_q / self.s)).clamp(self.Qn, self.Qp)
+            return x_round * scale, scale
+
+        else: # on inference
+            x_round = torch.floor((x * self.mult / 2**self.shift)+0.5).clamp(self.Qn, self.Qp)
+            if self.return_fp: # last layer, return output as fp32 
+                scale = self.observer.get_scale()
+                return x_round*scale, scale
+            else:
+                return x_round, None
+    
+    # def forward(self, x, a_s):
+    #     return x, a_s
+
+class QResAct(_QBase):
+    def __init__(self, bias_bit=32, mult_bit=16, return_fp=False, to_bit=8, training=True):
+        _QBase.__init__(self, to_bit, training)
+        self.bias_bit = bias_bit
+        self.rQn, self.rQp = signed_minmax(self.bias_bit)
+        self.mult_bit = mult_bit
+        self.return_fp = return_fp
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
+        
+        self.register_buffer('align_int', torch.tensor(0))
+        self.register_buffer('s', torch.tensor(0))
+        self.register_buffer('mult', torch.tensor(0))
+        self.register_buffer('shift', torch.tensor(0))
+        self.register_buffer('S_cur', torch.tensor(0))
+        self.register_buffer('S_res', torch.tensor(0))
+        
+
+    def __repr__(self):
+        s = super(QResAct, self).__repr__()
+        s = f"({s} bias_bit={self.bias_bit}, mult_bit={self.mult_bit})"
+        return s
+
+    def get_scales(self, name):
+        return [
+            (f"align/{name}_S_cur", self.S_cur),
+            (f"align/{name}_S_res", self.S_res),
+            # (f"rescale/{name}_rescale", self.s),
+            (f"{name}_align_inf_scale", self.align_int),
+        ]
+
+    def set_training(self, set=True):
+        self.training = set
+
+    def forward(self, x, a_s=None, res_x=None, res_a_s=None):
+        if self.training:
+            # requant inputs
+            res_x_q = res_x / res_a_s
+            x_q = x / a_s
+
+            # align residual input and quantize
+            self.S_res = res_a_s
+            self.S_cur = a_s
+            self.align_int = round_pass((res_a_s/a_s).clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
+            res_x_align = round_pass((res_x_q * self.align_int)).clamp(self.rQn, self.rQp)
+            
+            # obtain sum
+            mix_x_q = x_q + res_x_align
+            
+            # initialize scale on first input
+            mix_x = res_x + x # mix_x_q * a_s
+            scale = self.observer(mix_x)
+
+            # calculate approximate dyadic value and quantize
+            self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
+            mix_x_round = round_pass((mix_x_q / self.s).clamp(self.Qn, self.Qp))
+
+            return mix_x_round * scale, scale
+
+        else:
+            # align residual input
+            res_x_align = (res_x * self.align_int).clamp(self.rQn, self.rQp)
+
+            # obtain sum
+            mix_x = x + res_x_align
+
+            # quantize sum
+            mix_x_round = torch.floor((mix_x / self.s)+0.5).clamp(self.Qn, self.Qp)
+            if self.return_fp: # last layer, return output as fp32
+                scale = self.observer.get_scale()
+                return mix_x_round*scale, None
+            else:
+                return mix_x_round, None
+
+    # def forward(self, x, a_s=None, res_x=None, res_a_s=None):
+    #     return x+res_x, a_s
+    
+# QAT utill functions
+def set_training(model, set=True):
+    cnt = 0
+    for n, m in model.named_modules():
+        if issubclass(type(m), _QBase):
+            cnt += 1
+            m.set_training(set)
+    print(f"Set {cnt} layers to {set}.")
+
+def init_scale_counter(model):
+    cnt = 0
+    for n, m in model.named_modules():
+        if issubclass(type(m), LSQObserver):
+            cnt += 1
+            m.init_scale_counter()
+    print(f"Reset {cnt} counters.")
+
+
+#! Below are experimental, used for ResMLP
 class QLinearInner(QLinear):
     def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, linear, bias_bit, to_bit, training)
@@ -268,14 +462,14 @@ class QCrossPatch(_QBase):
         self.in_features = norm.in_features
         self.out_features = gamma.out_features
 
-        self.norm_w = Parameter(norm.weight.data, requires_grad=False)
-        self.norm_b = Parameter(norm.bias.data, requires_grad=False)
-        self.attn_w = Parameter(attn.weight.data, requires_grad=False)
-        self.attn_b = Parameter(attn.bias.data, requires_grad=False)
-        self.gamma_w = Parameter(gamma.weight.data, requires_grad=False)
+        self.norm_w = Parameter(norm.weight.data)
+        self.norm_b = Parameter(norm.bias.data)
+        self.attn_w = Parameter(attn.weight.data)
+        self.attn_b = Parameter(attn.bias.data)
+        self.gamma_w = Parameter(gamma.weight.data)
 
         W1 = self.norm_w * self.gamma_w
-        B1 = self.norm_b.repeat(196,1) @ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
+        B1 = self.norm_b.repeat(196,1)@ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
         W2 = self.attn_w
 
         self.register_buffer('w1_int', torch.zeros_like(W1.data))
@@ -437,149 +631,3 @@ class QCrossLayer2(_QBase):
     #     weight = self.gamma2_w @ self.fc2_w 
     #     bias = F.linear(self.gamma2_w, self.fc2_b)
     #     return F.linear(x, weight, bias), a_s
-
-
-
-class QAct(_QBase):
-    def __init__(self, mult_bit=16, return_fp=False, to_bit=8, training=True):
-        _QBase.__init__(self, to_bit, training)
-        self.mult_bit = mult_bit
-        self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
-        self.register_buffer('s', torch.tensor(0))
-        self.register_buffer('mult', torch.tensor(0))
-        self.register_buffer('shift', torch.tensor(0))
-        
-
-    def __repr__(self):
-        s = super(QAct, self).__repr__()
-        s = f'{s}(to_bit={self.to_bit}, mult_bit={self.mult_bit})'
-        return s
-
-    def get_scales(self, name):
-        return [
-            # (f"rescale/{name}_rescale", self.s),
-            # (f"{name}_SA", 1/self.s),
-            (f"{name}_inf_scale", self.mult / 2**self.shift)
-        ]
-
-    def set_training(self, set=True):
-        self.training = set
-
-    def forward(self, x, a_s=None):
-        if a_s == None: a_s = 1.0
-        if self.training:
-            # requant inputs, first layer's input will always be fp
-            x_q = x / a_s
-
-            # initialize scale on first input
-            scale = self.observer(x)
- 
-            # calculate approximate dyadic value, then quantize sum
-            self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
-            x_round = round_pass((x_q / self.s)).clamp(self.Qn, self.Qp)
-            return x_round * scale, scale
-
-        else: # on inference
-            x_round = torch.floor((x * self.mult / 2**self.shift)+0.5).clamp(self.Qn, self.Qp)
-            if self.return_fp: # last layer, return output as fp32 
-                scale = self.observer.get_scale()
-                return x_round*scale, scale
-            else:
-                return x_round, None
-    
-    # def forward(self, x, a_s):
-    #     return x, a_s
-
-class QResAct(_QBase):
-    def __init__(self, bias_bit=32, mult_bit=16, return_fp=False, to_bit=8, training=True):
-        _QBase.__init__(self, to_bit, training)
-        self.bias_bit = bias_bit
-        self.rQn, self.rQp = signed_minmax(self.bias_bit)
-        self.mult_bit = mult_bit
-        self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
-        
-        self.register_buffer('align_int', torch.tensor(0))
-        self.register_buffer('s', torch.tensor(0))
-        self.register_buffer('mult', torch.tensor(0))
-        self.register_buffer('shift', torch.tensor(0))
-        self.register_buffer('S_cur', torch.tensor(0))
-        self.register_buffer('S_res', torch.tensor(0))
-        
-
-    def __repr__(self):
-        s = super(QResAct, self).__repr__()
-        s = f"({s} bias_bit={self.bias_bit}, mult_bit={self.mult_bit})"
-        return s
-
-    def get_scales(self, name):
-        return [
-            (f"align/{name}_S_cur", self.S_cur),
-            (f"align/{name}_S_res", self.S_res),
-            # (f"rescale/{name}_rescale", self.s),
-            (f"{name}_align_inf_scale", self.align_int),
-        ]
-
-    def set_training(self, set=True):
-        self.training = set
-
-    def forward(self, x, a_s=None, res_x=None, res_a_s=None):
-        if self.training:
-            # requant inputs
-            res_x_q = res_x / res_a_s
-            x_q = x / a_s
-
-            # align residual input and quantize
-            self.S_res = res_a_s
-            self.S_cur = a_s
-            self.align_int = round_pass((res_a_s/a_s))#.clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
-            res_x_align = round_pass((res_x_q * self.align_int)).clamp(self.rQn, self.rQp)
-            
-            # obtain sum
-            mix_x_q = x_q + res_x_align
-            
-            # initialize scale on first input
-            mix_x = res_x + x # mix_x_q * a_s
-            scale = self.observer(mix_x)
-
-            # calculate approximate dyadic value and quantize
-            self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
-            mix_x_round = round_pass((mix_x_q / self.s).clamp(self.Qn, self.Qp))
-
-            return mix_x_round * scale, scale
-
-        else:
-            # align residual input
-            res_x_align = (res_x * self.align_int).clamp(self.rQn, self.rQp)
-
-            # obtain sum
-            mix_x = x + res_x_align
-
-            # quantize sum
-            mix_x_round = torch.floor((mix_x / self.s)+0.5).clamp(self.Qn, self.Qp)
-            if self.return_fp: # last layer, return output as fp32
-                scale = self.observer.get_scale()
-                return mix_x_round*scale, None
-            else:
-                return mix_x_round, None
-
-    # def forward(self, x, a_s=None, res_x=None, res_a_s=None):
-    #     return x+res_x, a_s
-    
-
-def set_training(model, set=True):
-    cnt = 0
-    for n, m in model.named_modules():
-        if issubclass(type(m), _QBase):
-            cnt += 1
-            m.set_training(set)
-    print(f"Set {cnt} layers to {set}.")
-
-def init_scale_counter(model):
-    cnt = 0
-    for n, m in model.named_modules():
-        if issubclass(type(m), LSQObserver):
-            cnt += 1
-            m.init_scale_counter()
-    print(f"Reset {cnt} counters.")

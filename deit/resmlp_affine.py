@@ -8,40 +8,51 @@ from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
 
+from q_resmlp import q_resmlp
+from q_resmlp_v2 import q_resmlp_v2
+
 
 __all__ = [
-    'resmlp_affine'
+    'resmlp_affine', 'q_resmlp_affine', 'q_resmlp_affine_v2'
 ]
 
-class Affine(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.alpha = nn.Parameter(torch.ones(dim))
-        self.beta = nn.Parameter(torch.zeros(dim))
+# class Affine(nn.Module):
+#     def __init__(self, dim):
+#         super().__init__()
+#         self.alpha = nn.Parameter(torch.ones(dim))
+#         self.beta = nn.Parameter(torch.zeros(dim))
 
-    def forward(self, x):
-        return self.alpha * x + self.beta    
+#     def forward(self, x):
+#         return self.alpha * x + self.beta  
+
+def Affine(dim):
+    return nn.Linear(dim, dim)
     
 class layers_scale_mlp_blocks(nn.Module):
-
-    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.GELU,init_values=1e-4,num_patches = 196):
+    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4, num_patches = 196):
         super().__init__()
         self.norm1 = Affine(dim)
         self.attn = nn.Linear(num_patches, num_patches)
+        self.gamma_1 = nn.Linear(dim, dim, bias=False)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.skip_add = nn.quantized.FloatFunctional()
+
         self.norm2 = Affine(dim)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
-        self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-        self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-
+        self.gamma_2 = nn.Linear(dim, dim, bias=False)
+        
     def forward(self, x):
-        x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x).transpose(1,2)).transpose(1,2))
-        x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
+        residual = x
+        #x = self.skip_add.add(residual, self.drop_path(self.gamma_1 * self.attn(self.norm1(x).transpose(1,2)).transpose(1,2)))
+        x = self.skip_add.add(residual, self.drop_path(self.gamma_1(self.attn(self.norm1(x).transpose(1,2)).transpose(1,2))))
+        
+        residual = x
+        #x = self.skip_add.add(residual, self.drop_path(self.gamma_2 * self.mlp(self.norm2(x))))
+        x = self.skip_add.add(residual, self.drop_path(self.gamma_2(self.mlp(self.norm2(x)))))
         return x 
 
 
 class resmlp_models(nn.Module):
-
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,drop_rate=0.,
                  Patch_layer=PatchEmbed,act_layer=nn.ReLU,
                 drop_path_rate=0.0,init_scale=1e-4):
@@ -62,10 +73,7 @@ class resmlp_models(nn.Module):
                 num_patches=num_patches)
             for i in range(depth)])
 
-
         self.norm = Affine(embed_dim)
-
-
 
         self.feature_info = [dict(num_chs=embed_dim, reduction=0, module='head')]
         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -79,8 +87,6 @@ class resmlp_models(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
-
-
 
     def get_classifier(self):
         return self.head
@@ -115,15 +121,50 @@ def resmlp_affine(pretrained=False,dist=False,dino=False,pretrained_cfg=False, *
         init_scale=1e-5,**kwargs)
     model.default_cfg = _cfg()
     if pretrained:
-        if dist:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dist.pth"
-        elif dino:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dino.pth"
-        else:
-          url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_no_dist.pth"
-        checkpoint = torch.hub.load_state_dict_from_url(
-            url=url_path,
-            map_location="cpu", check_hash=True
-        )   
+        # if dist:
+        #   url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dist.pth"
+        # elif dino:
+        #   url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_dino.pth"
+        # else:
+        #   url_path = "https://dl.fbaipublicfiles.com/deit/resmlp_24_no_dist.pth"
+        # checkpoint = torch.hub.load_state_dict_from_url(
+        #     url=url_path,
+        #     map_location="cpu", check_hash=True
+        # )   
+        checkpoint=torch.load("ResMLP_S24_ReLU_fp32_80.602.pth")
         model.load_state_dict(checkpoint)
     return model
+
+@register_model
+def q_resmlp_affine(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs): #resmlp_24
+    model = resmlp_models(
+        patch_size=16, embed_dim=384, depth=24,
+        Patch_layer=PatchEmbed,
+        init_scale=1e-5,**kwargs)
+    model.default_cfg = _cfg()   
+    if pretrained:
+        checkpoint=torch.load("ResMLP_S24_ReLU_fp32_80.602.pth")
+        model.load_state_dict(checkpoint)
+
+    qmodel = q_resmlp(model)
+    if pretrained:
+        # checkpoint=torch.load("folder/v2-freeze3/checkpoint.pth")['state_dict']
+        model.load_state_dict(checkpoint)
+    return qmodel
+
+@register_model
+def q_resmlp_affine_v2(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs): #resmlp_24
+    model = resmlp_models(
+        patch_size=16, embed_dim=384, depth=24,
+        Patch_layer=PatchEmbed,
+        init_scale=1e-5,**kwargs)
+    model.default_cfg = _cfg()   
+    if pretrained:
+        checkpoint=torch.load("ResMLP_S24_ReLU_fp32_80.602.pth")
+        model.load_state_dict(checkpoint)
+
+    qmodel = q_resmlp_v2(model)
+    if pretrained:
+        checkpoint=torch.load("folder/v2-freeze3/checkpoint.pth.tar")['state_dict']
+        qmodel.load_state_dict(checkpoint)
+    return qmodel

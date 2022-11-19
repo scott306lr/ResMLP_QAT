@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import copy
 
-from ..quantization.quantizer.lsq import *
-# from ..quantization.quantizer.lsq import *
+from lsq import QLinear, QConv, QCrossPatch, QCrossLayer1, QCrossLayer2, QAct, QResAct
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
@@ -79,18 +78,13 @@ class QLayer_Block(nn.Module):
         self.gamma_1 = QLinear(block.gamma_1)
         self.add_1 = QResAct(to_bit=self.res_to_bit)
 
-        self.linear1 = QCrossLayer1([block.norm2, block.mlp.fc1])
-        self.relu = torch.nn.ReLU()
+        self.norm2 = QLinear(block.norm2)
         self.act3 = QAct()
 
-        self.linear2 = QCrossLayer2([block.mlp.fc2, block.gamma_2])
-        # self.norm2 = QLinear(block.norm2)
-        # self.act3 = QAct()
+        self.mlp = Q_Mlp(block.mlp)
+        self.act4 = QAct()
 
-        # self.mlp = Q_Mlp(block.mlp)
-        # self.act4 = QAct()
-
-        # self.gamma_2 = QLinear(block.gamma_2)
+        self.gamma_2 = QLinear(block.gamma_2)
 
         if layer == 24-1:
             self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
@@ -134,20 +128,14 @@ class QLayer_Block(nn.Module):
         org_x, org_a_s = x, a_s
         
         # ---- Cross-channel sublayer ---- START
-        x, a_s = self.linear1(x, a_s)
-        x = self.relu(x)
+        x, a_s = self.norm2(x, a_s)
         x, a_s = self.act3(x, a_s)
 
-        x, a_s = self.linear2(x, a_s)
+        x, a_s = self.mlp(x, a_s)
+        x, a_s = self.act4(x, a_s)
+
+        x, a_s = self.gamma_2(x, a_s)
         x, a_s = self.add_2(x, a_s, org_x, org_a_s)
-        # x, a_s = self.norm2(x, a_s)
-        # x, a_s = self.act3(x, a_s)
-
-        # x, a_s = self.mlp(x, a_s)
-        # x, a_s = self.act4(x, a_s)
-
-        # x, a_s = self.gamma_2(x, a_s)
-        # x, a_s = self.add_2(x, a_s, org_x, org_a_s)
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
@@ -194,6 +182,6 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp_v2(model):
+def q_resmlp(model):
     net = Q_ResMLP24(model)
     return net

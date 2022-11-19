@@ -183,6 +183,6 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp(model):
+def q_resmlp_norm(model):
     net = Q_ResMLP24(model)
     return net

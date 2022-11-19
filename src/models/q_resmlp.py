@@ -43,9 +43,8 @@ class Q_Mlp(nn.Module):
     def set_param(self, mlp):
         self.fc1 = QLinear(mlp.fc1)
         self.relu = torch.nn.ReLU()
-        self.act1 = QAct()
+        self.act = QAct()
         self.fc2 = QLinear(mlp.fc2)
-        self.act2 = QAct()
     
     def get_scales(self):
         scales = []
@@ -59,9 +58,8 @@ class Q_Mlp(nn.Module):
         # forward using the quantized modules
         x, a_s = self.fc1(x, a_s)
         x = self.relu(x)
-        x, a_s = self.act1(x, a_s)
+        x, a_s = self.act(x, a_s)
         x, a_s = self.fc2(x, a_s)
-        x, a_s = self.act2(x, a_s)
         return x, a_s
 
 class QLayer_Block(nn.Module):
@@ -85,6 +83,7 @@ class QLayer_Block(nn.Module):
         self.act3 = QAct()
 
         self.mlp = Q_Mlp(block.mlp)
+        self.act4 = QAct()
 
         self.gamma_2 = QLinear(block.gamma_2)
 
@@ -134,6 +133,7 @@ class QLayer_Block(nn.Module):
         x, a_s = self.act3(x, a_s)
 
         x, a_s = self.mlp(x, a_s)
+        x, a_s = self.act4(x, a_s)
 
         x, a_s = self.gamma_2(x, a_s)
         x, a_s = self.add_2(x, a_s, org_x, org_a_s)

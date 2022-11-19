@@ -24,7 +24,7 @@ import torchvision.datasets as datasets
 
 from src.data_utils import AverageMeter, ProgressMeter
 from src.quantization.quantizer.lsq import set_training
-from src.post_quant.cle import cle_for_resmlp_v3
+from src.post_quant.cle import cle_for_resmlp, cle_for_resmlp_v3
 from src.post_quant.rca import rca_for_resmlp
 from src.models import *
 from timm.scheduler.cosine_lr import CosineLRScheduler
@@ -156,7 +156,13 @@ parser.add_argument('--regular',
                     help='if set to true, run with original model')
 parser.add_argument('--cle',
                     action='store_true',
-                    help='if set to true, run cle before QAT')      
+                    help='if set to true, run cle before QAT')  
+parser.add_argument('--freeze-w',
+                    action='store_true',
+                    help='if set to true, freeze weight and update scale only') 
+parser.add_argument('--skip-val',
+                    action='store_true',
+                    help='if set to true, skip validation')       
 parser.add_argument('--rca',
                     action='store_true',
                     help='if set to true, run rca before QAT')   
@@ -165,7 +171,7 @@ parser.add_argument('--wandb',
                     help='if set to true, log with wandb')
 best_acc1 = 0
 
-arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24_v2, 'q_resmlp_v3': resmlp_24_v3}
+arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24, 'q_resmlp_v3': resmlp_24}
 quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2, 'q_resmlp_v3': q_resmlp_v3}
 
 args = parser.parse_args()
@@ -233,6 +239,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.cle:
         logging.info("=> Applying CLE on model")
+        # if args.arch == "q_resmlp_v3":
+        #     cle_for_resmlp_v3(model)
+        # else:
         cle_for_resmlp(model)
     
 
@@ -268,10 +277,19 @@ def main_worker(gpu, ngpus_per_node, args):
         quantize_arch = quantize_arch_dict[args.arch]
         model = quantize_arch(model)
 
-    if args.arch == "q_resmlp_v3":
-        for i in range(0, 24):
-            # model.blocks[i].inner.requires_grad = False
-            model.blocks[i].outer.weight.requires_grad = False
+    # if args.arch == "q_resmlp_v3":
+    #     for i in range(0, 24):
+    #         # model.blocks[i].inner.requires_grad = False
+    #         model.blocks[i].outer.weight.requires_grad = False
+    
+    if args.freeze_w:
+        for param in model.parameters():
+            param.requires_grad = False
+
+        for n, m in model.named_modules():
+            if isinstance(m, LSQObserver):
+                for param in m.parameters():
+                    param.requires_grad = True
 
     print("args.batch_size", args.batch_size)
     # for name, m in model.named_modules():
@@ -408,30 +426,41 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
-        acc1 = validate(val_loader, model, criterion, args)
-        scheduler.step(epoch)
-
-        # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
-
-        # record the best epoch
-        if is_best:
-            best_epoch = epoch
         
-        logging.info(f'Best acc at epoch {best_epoch}: {best_acc1}')
+        if not args.skip_val:
+            acc1 = validate(val_loader, model, criterion, args)
+            scheduler.step(epoch)
 
-        # saving
-        if not os.path.exists(args.save_path):
-            os.makedirs(args.save_path)
+            # remember best acc@1 and save checkpoint
+            is_best = acc1 > best_acc1
+            best_acc1 = max(acc1, best_acc1)
 
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_acc1': best_acc1,
-            'optimizer': optimizer.state_dict(),
-        }, is_best, args.save_path)
+            # record the best epoch
+            if is_best:
+                best_epoch = epoch
+            
+            logging.info(f'Best acc at epoch {best_epoch}: {best_acc1}')
+            
+            if not os.path.exists(args.save_path):
+                os.makedirs(args.save_path)
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'best_acc1': best_acc1,
+                'optimizer': optimizer.state_dict(),
+            }, is_best, args.save_path)
+        else:
+            # saving
+            if not os.path.exists(args.save_path):
+                os.makedirs(args.save_path)
+
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+            }, True, args.save_path)
         
 
 
@@ -447,9 +476,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
-    set_training(model, True)
+    # set_training(model, True)
     model.train()
-
     end = time.time()
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
@@ -611,7 +639,7 @@ def validate(val_loader, model, criterion, args):
         prefix='Test: ')
 
     # switch to evaluate mode
-    set_training(model, False)
+    # set_training(model, False)
     model.eval()
 
     with torch.no_grad():
@@ -664,7 +692,7 @@ def validate(val_loader, model, criterion, args):
 
                 
     # logging.info(model.state_dict().items())
-    set_training(model, True)
+    # set_training(model, True)
     return top1.avg
 
 
