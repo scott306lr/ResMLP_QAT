@@ -3,63 +3,20 @@ import torch
 from torch import nn
 from torch.nn import Module, Parameter
 import torch.nn.functional as F
-import math
-
-from quant_func import signed_minmax, scale_to_dyadic, dyadic_to_scale
-
-def grad_scale(x: torch.Tensor, scale: torch.Tensor):
-    y = x
-    y_grad = x * scale
-    return y.detach() - y_grad.detach() + y_grad
-
-def dyadic_scale(scale: torch.Tensor, mult_bit):
-    m, e = scale_to_dyadic(1 / scale, mult_bit)
-    d_scale = 1 / dyadic_to_scale(m, e)
-    return d_scale.detach() - scale.detach() + scale, (m, e)
-
-def round_pass(x: torch.Tensor):
-    y = (x).round()
-    y_grad = x
-    return y.detach() - y_grad.detach() + y_grad
-
-def get_scale_func(mode, Qn, Qp):
-    if mode == "minmax":
-        def observer(x: torch.Tensor):
-            y = x.detach().abs()
-            return torch.max(y) / Qp
-        return observer
-
-    elif mode == "lsq":
-        def observer(x: torch.Tensor):
-            y = x.detach().abs()
-            mean = torch.mean(y[y.nonzero(as_tuple=True)])
-            return 2*mean / math.sqrt(Qp)
-        return observer
-
-    elif mode == "lsq+":
-        def observer(x: torch.Tensor):
-            y = x.detach().abs()
-            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-            return torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
-        return observer
-
-    else:
-        raise NotImplementedError
+from quant_func import *
 
 ## Observer Classes
 class _Observer(Module):
-    def __init__(self, Qn, Qp, mode, name="Observer"):
+    def __init__(self, Qn, Qp, name="Observer"):
         super().__init__()
-        self.mode = mode
-        self.scale_func = get_scale_func(mode, Qn, Qp)
         self.Qn = Qn
         self.Qp = Qp
-        self.scale = Parameter(torch.tensor(0.))
         self.name = name
+        self.scale = None
         self.register_buffer('counter', torch.tensor(0))
     
     def __repr__(self):
-        return f"Observer(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp})"
+        return f"Observer(Qn={self.Qn}, Qp={self.Qp})"
     
     def init_scale_counter(self):
         self.counter.data = torch.tensor(0)
@@ -70,38 +27,32 @@ class _Observer(Module):
     def forward(self, x: torch.Tensor):
         raise NotImplementedError
 
-class MinmaxObserver(Module):
-    def __init__(self, Qn, Qp, mode="minmax", name="Observer", momentum=0.1):
-        _Observer(self, Qn, Qp, mode, name).__init__()
+class MinmaxObserver(_Observer):
+    def __init__(self, Qn, Qp, name="MinMaxObserver", momentum=0.1):
+        _Observer(self, Qn, Qp, name).__init__()
         self.momentum = momentum
-        self.min = Qp + 1
-        self.max = Qn - 1
-        self.register_buffer('scale', torch.tensor(0))
+        self.register_buffer('min', torch.tensor(0.))
+        self.register_buffer('max', torch.tensor(0.))
+        self.register_buffer('scale', torch.tensor(0.))
 
     def __repr__(self):
         return f"MinmaxObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
-    
-    def init_scale_counter(self):
-        self.counter.data = torch.tensor(0)
-
-    def get_scale(self):
-        return self.scale
 
     def forward(self, x: torch.Tensor):
+        y = x.detach().abs()
+        min, max = y.min(), y.max()
         if self.counter == 0:
-            y = x.detach().abs()
-            self.min, self.max = y.min(), y.max()
+            self.min, self.max = min, max
             self.counter = 1
         else:
-            y = x.detach().abs()
-            min, max = y.min(), y.max()
             self.max = (1-self.momentum)*self.max + self.momentum*max
             self.min = (1-self.momentum)*self.min  + self.momentum*min
-            self.scale.data = (self.max - self.min) / (self.Qp - self.Qn)
+        
+        self.scale.data = (self.max - self.min) / (self.Qp - self.Qn)
         return self.scale
 
 class LSQObserver(Module):
-    def __init__(self, Qn, Qp, name="Observer", mode="lsq", calibrate_count=1, momentum=0.1):
+    def __init__(self, Qn, Qp, name="LSQObserver", mode="lsq", calibrate_count=1, momentum=0.1):
         _Observer(self, Qn, Qp, name).__init__()
         self.mode = mode
         self.scale_func = get_scale_func(mode, Qn, Qp)
@@ -111,12 +62,6 @@ class LSQObserver(Module):
     
     def __repr__(self):
         return f"LSQObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
-    
-    def init_scale_counter(self):
-        self.counter.data = torch.tensor(0)
-
-    def get_scale(self):
-        return self.scale
 
     def forward(self, x: torch.Tensor):
         if self.counter < self.calibrate_count:
@@ -126,7 +71,8 @@ class LSQObserver(Module):
                 std, mean = torch.std_mean(x[x.nonzero(as_tuple=True)])
                 print(f"\n{self.name}:")
                 print(f"\tinput val: std:{std}, mean:{mean}")
-                print(f"\tscale: prev: {prev}, cur: {self.scale.data}")
+                print(f"\tscale val: {self.scale.data}")
+
             else:
                 self.scale.data = (1-self.momentum)*self.scale.data + self.momentum*self.scale_func(x)
             self.counter += 1
@@ -252,7 +198,6 @@ class QAct(_QBase):
         self.register_buffer('s', torch.tensor(0))
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
-        
 
     def __repr__(self):
         s = super(QAct, self).__repr__()
@@ -263,9 +208,6 @@ class QAct(_QBase):
         return [
             (f"{name}_inf_scale", self.mult / 2**self.shift)
         ]
-
-    def set_training(self, set=True):
-        self.training = set
 
     def forward(self, x, a_s=None):
         if a_s == None: a_s = 1.0
@@ -322,9 +264,6 @@ class QResAct(_QBase):
             (f"{name}_align_inf_scale", self.align_int),
         ]
 
-    def set_training(self, set=True):
-        self.training = set
-
     def forward(self, x, a_s=None, res_x=None, res_a_s=None):
         if self.training:
             # requant inputs
@@ -369,14 +308,6 @@ class QResAct(_QBase):
     #     return x+res_x, a_s
     
 # QAT utill functions
-def set_training(model, set=True):
-    cnt = 0
-    for n, m in model.named_modules():
-        if issubclass(type(m), _QBase):
-            cnt += 1
-            m.set_training(set)
-    print(f"Set {cnt} layers to {set}.")
-
 def init_scale_counter(model):
     cnt = 0
     for n, m in model.named_modules():
@@ -384,7 +315,6 @@ def init_scale_counter(model):
             cnt += 1
             m.init_scale_counter()
     print(f"Reset {cnt} counters.")
-
 
 #! Below are experimental, used for ResMLP
 class QLinearInner(QLinear):
@@ -427,21 +357,21 @@ class QLinearOuter(QLinear):
     def forward(self, x, a_s):
         return self.weight @ x, None#torch.ones_like(a_s)
 
-# class QLinearBN(QLinear):
-#     def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
-#         QLinear.__init__(self, bn, bias_bit, to_bit, training)
+class QLinearBN(QLinear):
+    def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
+        QLinear.__init__(self, bn, bias_bit, to_bit, training)
     
-#     def inherit_layer(self, bn: nn.BatchNorm1d):
-#         self.in_features = bn.num_features
-#         self.out_features = bn.num_features
+    def inherit_layer(self, bn: nn.BatchNorm1d):
+        self.in_features = bn.num_features
+        self.out_features = bn.num_features
 
-#         output_factor = bn.weight / torch.sqrt(bn.running_var + bn.eps)
-#         weight = torch.diag(output_factor)
-#         bias = - output_factor * bn.running_mean + bn.bias
-#         self.weight = Parameter(weight)
-#         self.bias = Parameter(bias)
-#         self.register_buffer('w_int', torch.zeros_like(self.weight.data))
-#         self.register_buffer('b_int', torch.zeros_like(self.bias.data))
+        output_factor = bn.weight / torch.sqrt(bn.running_var + bn.eps)
+        weight = torch.diag(output_factor)
+        bias = - output_factor * bn.running_mean + bn.bias
+        self.weight = Parameter(weight)
+        self.bias = Parameter(bias)
+        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
+        self.register_buffer('b_int', torch.zeros_like(self.bias.data))
 
 class QCrossPatch(_QBase):
     def __init__(self, linears: List[nn.Linear], mult_bit=16, bias_bit=32, to_bit=8, training=True):

@@ -23,8 +23,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
 from src.data_utils import AverageMeter, ProgressMeter
-from src.quantization.quantizer.lsq import set_training
-from src.post_quant.cle import cle_for_resmlp, cle_for_resmlp_v3
+from src.post_quant.cle import cle_for_resmlp#, cle_for_resmlp_v3
 from src.post_quant.rca import rca_for_resmlp
 from src.models import *
 from timm.scheduler.cosine_lr import CosineLRScheduler
@@ -639,7 +638,6 @@ def validate(val_loader, model, criterion, args):
         prefix='Test: ')
 
     # switch to evaluate mode
-    # set_training(model, False)
     model.eval()
 
     with torch.no_grad():
@@ -692,7 +690,6 @@ def validate(val_loader, model, criterion, args):
 
                 
     # logging.info(model.state_dict().items())
-    # set_training(model, True)
     return top1.avg
 
 
