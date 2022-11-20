@@ -12,6 +12,12 @@ def signed_minmax(b):
     n = signed_max_bits(b)
     return -n, n
 
+def sign_pass(x): # for bitwidth = 1, 
+    yOut = x.sign()
+    yGrad = x
+    y = (yOut - yGrad).detach() + yGrad
+    return y
+
 # STE (Straight Through Estimator)
 def round_pass(x: torch.Tensor):
     y = (x).round()
@@ -35,6 +41,16 @@ def dyadic_scale(scale: torch.Tensor, mult_bit):
     m, e = scale_to_dyadic(1 / scale, mult_bit)
     d_scale = 1 / dyadic_to_scale(m, e)
     return d_scale.detach() - scale.detach() + scale, (m, e)
+
+class FakeRoundOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        return torch.round(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # straight through estimator
+        return grad_output, None, None, None
 
 # Give scale a additional gradient (used in LSQ)
 def grad_scale(x: torch.Tensor, scale: torch.Tensor):
