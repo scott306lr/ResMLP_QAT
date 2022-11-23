@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.nn import Module, Parameter
 import torch.nn.functional as F
-from .quant_func import *
+from quant_func import *
 
 ## Observer Classes
 class _Observer(Module):
@@ -29,7 +29,7 @@ class _Observer(Module):
 
 class MinmaxObserver(_Observer):
     def __init__(self, Qn, Qp, name="MinMaxObserver", momentum=0.1):
-        _Observer.__init__(self, Qn, Qp, name)
+        _Observer(self, Qn, Qp, name).__init__()
         self.momentum = momentum
         self.register_buffer('min', torch.tensor(0.))
         self.register_buffer('max', torch.tensor(0.))
@@ -51,16 +51,15 @@ class MinmaxObserver(_Observer):
         self.scale.data = (self.max - self.min) / (self.Qp - self.Qn)
         return self.scale
 
-class LSQObserver(_Observer):
+class LSQObserver(Module):
     def __init__(self, Qn, Qp, name="LSQObserver", mode="lsq", calibrate_count=1, momentum=0.1):
-        _Observer.__init__(self, Qn, Qp, name)
+        _Observer(self, Qn, Qp, name).__init__()
         self.mode = mode
         self.scale_func = get_scale_func(mode, Qn, Qp)
         self.momentum = momentum
-        self.register_buffer('calibrate_count', torch.tensor(calibrate_count))
-        self.scale = Parameter(torch.tensor(0.))
         self.g = None
-
+        self.register_buffer('calibrate_count', torch.tensor(calibrate_count))
+    
     def __repr__(self):
         return f"LSQObserver(mode={self.mode}, Qn={self.Qn}, Qp={self.Qp}, calibrate_count={self.calibrate_count}, momentum={self.momentum})"
 
@@ -84,12 +83,13 @@ class LSQObserver(_Observer):
         scale = grad_scale(self.scale, self.g)
         return scale
 
+## QAT Classes
 class _QBase(Module):
     def __init__(self, to_bit=8, training=True):
         super().__init__()
         self.Qn, self.Qp = signed_minmax(to_bit)
         self.to_bit = to_bit
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp)
         self.training = training
 
     def extra_repr(self):
@@ -153,22 +153,6 @@ class QLinear(_QBase):
     # def forward(self, x, a_s):
     #     return F.linear(x, self.weight, self.bias), a_s
 
-#TODO: bias correction & retain BN on train
-class QLinearBN(QLinear):
-    def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
-        QLinear.__init__(self, bn, bias_bit, to_bit, training)
-    
-    def inherit_layer(self, bn: nn.BatchNorm1d):
-        self.in_features = bn.num_features
-        self.out_features = bn.num_features
-
-        output_factor = bn.weight / torch.sqrt(bn.running_var + bn.eps)
-        weight = torch.diag(output_factor)
-        bias = - output_factor * bn.running_mean + bn.bias
-        self.weight = Parameter(weight)
-        self.bias = Parameter(bias)
-        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
-        self.register_buffer('b_int', torch.zeros_like(self.bias.data))
 
 class QConv(QLinear):
     def __init__(self, conv: nn.Conv2d, bias_bit=32, to_bit=8, training=True):
@@ -214,7 +198,6 @@ class QAct(_QBase):
         self.register_buffer('s', torch.tensor(0))
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
-        
 
     def __repr__(self):
         s = super(QAct, self).__repr__()
@@ -223,13 +206,8 @@ class QAct(_QBase):
 
     def get_scales(self, name):
         return [
-            # (f"rescale/{name}_rescale", self.s),
-            # (f"{name}_SA", 1/self.s),
             (f"{name}_inf_scale", self.mult / 2**self.shift)
         ]
-
-    def set_training(self, set=True):
-        self.training = set
 
     def forward(self, x, a_s=None):
         if a_s == None: a_s = 1.0
@@ -286,9 +264,6 @@ class QResAct(_QBase):
             (f"{name}_align_inf_scale", self.align_int),
         ]
 
-    def set_training(self, set=True):
-        self.training = set
-
     def forward(self, x, a_s=None, res_x=None, res_a_s=None):
         if self.training:
             # requant inputs
@@ -298,7 +273,7 @@ class QResAct(_QBase):
             # align residual input and quantize
             self.S_res = res_a_s
             self.S_cur = a_s
-            self.align_int = round_pass((res_a_s/a_s))#.clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
+            self.align_int = round_pass((res_a_s/a_s).clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
             res_x_align = round_pass((res_x_q * self.align_int)).clamp(self.rQn, self.rQp)
             
             # obtain sum
@@ -332,15 +307,7 @@ class QResAct(_QBase):
     # def forward(self, x, a_s=None, res_x=None, res_a_s=None):
     #     return x+res_x, a_s
     
-# Quant Utils
-def set_training(model, set=True):
-    cnt = 0
-    for n, m in model.named_modules():
-        if issubclass(type(m), _QBase):
-            cnt += 1
-            m.set_training(set)
-    print(f"Set {cnt} layers to {set}.")
-
+# QAT utill functions
 def init_scale_counter(model):
     cnt = 0
     for n, m in model.named_modules():
@@ -349,11 +316,11 @@ def init_scale_counter(model):
             m.init_scale_counter()
     print(f"Reset {cnt} counters.")
 
-#! Experimental, used for Hardware-Aware ResMLP
+#! Below are experimental, used for ResMLP
 class QLinearInner(QLinear):
     def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, linear, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp)
 
     def inference(self, x: torch.Tensor):
         return x @ self.w_int + self.b_int
@@ -367,7 +334,7 @@ class QLinearInner(QLinear):
 class QLinearOuter(QLinear):
     def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, linear, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp)
 
     def inherit_layer(self, linear: nn.Linear):
         self.in_features = linear.in_features
@@ -390,17 +357,33 @@ class QLinearOuter(QLinear):
     def forward(self, x, a_s):
         return self.weight @ x, None#torch.ones_like(a_s)
 
+class QLinearBN(QLinear):
+    def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
+        QLinear.__init__(self, bn, bias_bit, to_bit, training)
+    
+    def inherit_layer(self, bn: nn.BatchNorm1d):
+        self.in_features = bn.num_features
+        self.out_features = bn.num_features
+
+        output_factor = bn.weight / torch.sqrt(bn.running_var + bn.eps)
+        weight = torch.diag(output_factor)
+        bias = - output_factor * bn.running_mean + bn.bias
+        self.weight = Parameter(weight)
+        self.bias = Parameter(bias)
+        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
+        self.register_buffer('b_int', torch.zeros_like(self.bias.data))
+
 class QCrossPatch(_QBase):
     def __init__(self, linears: List[nn.Linear], mult_bit=16, bias_bit=32, to_bit=8, training=True):
         _QBase.__init__(self, to_bit, training)
         self.inherit_layer(linears)
         self.bias_bit = bias_bit
         self.bQn, self.bQp = signed_minmax(self.bias_bit)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', name="W1")
-        self.observer2 = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', name="W2")
+        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, name="W1")
+        self.observer2 = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, name="W2")
 
         self.mult_bit = mult_bit
-        self.observer_act = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', calibrate_count=20, momentum=0.1, name="Wact")
+        self.observer_act = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Wact")
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
     
@@ -409,14 +392,14 @@ class QCrossPatch(_QBase):
         self.in_features = norm.in_features
         self.out_features = gamma.out_features
 
-        self.norm_w = Parameter(norm.weight.data, requires_grad=False)
-        self.norm_b = Parameter(norm.bias.data, requires_grad=False)
-        self.attn_w = Parameter(attn.weight.data, requires_grad=False)
-        self.attn_b = Parameter(attn.bias.data, requires_grad=False)
-        self.gamma_w = Parameter(gamma.weight.data, requires_grad=False)
+        self.norm_w = Parameter(norm.weight.data)
+        self.norm_b = Parameter(norm.bias.data)
+        self.attn_w = Parameter(attn.weight.data)
+        self.attn_b = Parameter(attn.bias.data)
+        self.gamma_w = Parameter(gamma.weight.data)
 
         W1 = self.norm_w * self.gamma_w
-        B1 = self.norm_b.repeat(196,1) @ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
+        B1 = self.norm_b.repeat(196,1)@ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
         W2 = self.attn_w
 
         self.register_buffer('w1_int', torch.zeros_like(W1.data))
@@ -480,8 +463,11 @@ class QCrossPatch(_QBase):
 
 class QCrossLayer1(_QBase):
     def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True):
-        QLinear.__init__(self, linears, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='minmax', name="CL1")
+        _QBase.__init__(self, to_bit, training)
+        self.inherit_layer(linears)
+        self.bias_bit = bias_bit
+        self.bQn, self.bQp = signed_minmax(self.bias_bit)
+        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, name="CL1")
 
     def inherit_layer(self, linears: List[nn.Linear]):
         norm, fc1 = linears[0], linears[1]
@@ -526,10 +512,13 @@ class QCrossLayer1(_QBase):
     #     bias = self.fc1_b + F.linear(self.fc1_w, self.norm_b)
     #     return F.linear(x, weight, bias), a_s
 
-class QCrossLayer2(QLinear):
+class QCrossLayer2(_QBase):
     def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True):
-        QLinear.__init__(self, linears, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='minmax', name="CL1")
+        _QBase.__init__(self, to_bit, training)
+        self.inherit_layer(linears)
+        self.bias_bit = bias_bit
+        self.bQn, self.bQp = signed_minmax(self.bias_bit)
+        self.observer = LSQObserver(mode='minmax', Qn=self.Qn, Qp=self.Qp, name="CL2")
 
     def inherit_layer(self, linears: List[nn.Linear]):
         fc2, gamma_2 = linears[0], linears[1]
