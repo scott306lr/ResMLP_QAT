@@ -170,8 +170,8 @@ parser.add_argument('--wandb',
                     help='if set to true, log with wandb')
 best_acc1 = 0
 
-arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24, 'q_resmlp_v3': resmlp_24}
-quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2, 'q_resmlp_v3': q_resmlp_v3}
+arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24, 'q_resmlp_v3': resmlp_24, 'q_resmlp_v2_5': resmlp_24}
+quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2, 'q_resmlp_v3': q_resmlp_v3, 'q_resmlp_v2_5': q_resmlp_v2_5}
 
 args = parser.parse_args()
 if not os.path.exists(args.save_path):
@@ -343,6 +343,15 @@ def main_worker(gpu, ngpus_per_node, args):
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
+    
+    # enlarge weight decay for inner linear's bias
+    # if args.arch == "q_resmlp_v3":
+    #     optimizer = torch.optim.SGD([
+    #             {'params': (p for name, p in model.named_parameters() if 'bias' not in name), 'weight_decay': 0.0001},
+    #             {'params': (p for name, p in model.named_parameters() if 'bias' in name)}
+    #         ]
+
+    #     )
     
     scheduler = CosineLRScheduler(optimizer, t_initial=args.epochs)
     cudnn.benchmark = True
