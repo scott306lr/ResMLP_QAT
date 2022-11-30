@@ -23,7 +23,7 @@ class QPatchEmbed(nn.Module):
     def get_scales(self):
         scales = []
         # scales += self.proj.get_scales("PatchEmbed_Conv")
-        # scales += self.act.get_scales("PatchEmbed_Act")
+        scales += self.act.get_scales("PatchEmbed_Act")
         return scales
 
     def forward(self, x, a_s=None):
@@ -62,7 +62,7 @@ class Q_Mlp(nn.Module):
         x, a_s = self.fc2(x, a_s)
         return x, a_s
 
-QUANT_LAYERS = 3
+QUANT_LAYERS = 24
 class QLayer_Block(nn.Module):
     def __init__(self, block, layer, res_to_bit):
         super(QLayer_Block, self).__init__()
@@ -71,14 +71,19 @@ class QLayer_Block(nn.Module):
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
-        self.inner = QLinearInner(block.inner)
-        self.act = QAct()
+        # self.crossPatch = QCrossPatch([block.norm1, block.attn, block.gamma_1])
+        self.inner = QLinearInner([block.norm1, block.attn, block.gamma_1])
+        self.outer = QLinearOuter([block.norm1, block.attn, block.gamma_1])
 
-        self.outer = QLinearOuter(block.outer)
-        self.test_act = QAct(to_bit=8)
         self.add_1 = QResAct(to_bit=self.res_to_bit)
 
+        self.norm2 = QLinear(block.norm2)
+        self.act3 = QAct()
+
         self.mlp = Q_Mlp(block.mlp)
+        self.act4 = QAct()
+
+        self.gamma_2 = QLinear(block.gamma_2)
 
         if layer == QUANT_LAYERS-1:
             self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
@@ -108,22 +113,27 @@ class QLayer_Block(nn.Module):
         org_x, org_a_s = x, a_s
 
         # ----- Cross-patch sublayer ----- START
+        # x, a_s = self.crossPatch(x, a_s)
         x, a_s = self.inner(x, a_s)
-        x, a_s = self.act(x, a_s)
-        x.transpose(1, 2)
         x, a_s = self.outer(x, a_s)
-        x.transpose(1, 2)
-        x, a_s = self.test_act(x, a_s)
+        
         x, a_s = self.add_1(x, a_s, org_x, org_a_s)
         # ----- Cross-patch sublayer ----- END
-
         org_x, org_a_s = x, a_s
+        
         # ---- Cross-channel sublayer ---- START
+        x, a_s = self.norm2(x, a_s)
+        x, a_s = self.act3(x, a_s)
+
         x, a_s = self.mlp(x, a_s)
+        x, a_s = self.act4(x, a_s)
+
+        x, a_s = self.gamma_2(x, a_s)
         x, a_s = self.add_2(x, a_s, org_x, org_a_s)
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
+RES_RESCALE_BIT = 8
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.
@@ -131,12 +141,11 @@ class Q_ResMLP24(nn.Module):
     def __init__(self, model):
         super().__init__()
         self.quant_input = QAct(to_bit=8)
-        self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=8)
-        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=8) for i in range(24)])
+        self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=RES_RESCALE_BIT)
+        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
         self.norm = model.norm#QLinear(model.norm) #model.norm
         self.head = model.head#QLinear(getattr(model, 'head'))
 
-        self.patch_embed = model.patch_embed
         self.org_blocks = model.blocks
 
     def get_scales(self):
@@ -145,7 +154,7 @@ class Q_ResMLP24(nn.Module):
         scales += self.quant_patch.get_scales()
 
         for i, blk in enumerate(self.blocks):
-            # if i >= ALL_FP_LAYER-1 and i <= ALL_FP_LAYER+1 : 
+            # if i >= ALL_FP_LAYER-1 and i <= ALL_FP_LAYER+1 :
             scales += blk.get_scales()
 
         return scales
@@ -156,19 +165,16 @@ class Q_ResMLP24(nn.Module):
         a_s = None
         x, a_s = self.quant_input(x, a_s)
         x, a_s = self.quant_patch(x, a_s)
-        # x = self.patch_embed(x)
 
-        for i, blk in enumerate(self.blocks):
-            x, a_s = blk(x, a_s)
+        # for i, blk in enumerate(self.blocks):
+        #     x, a_s = blk(x, a_s)
 
-        # for i in range(0, QUANT_LAYERS):
-        #     x, a_s = self.blocks[i](x, a_s)
+        for i in range(0, QUANT_LAYERS):
+            x, a_s = self.blocks[i](x, a_s)
 
-        # for i in range(QUANT_LAYERS, 24):
-        #     x = self.org_blocks[i](x)
-        
-        # for i, blk in enumerate(self.org_blocks):
-        #     x = blk(x)
+        for i in range(QUANT_LAYERS, 24):
+            x = self.org_blocks[i](x)
+            
    
         #! all fp32 below
         x = self.norm(x)
@@ -179,6 +185,6 @@ class Q_ResMLP24(nn.Module):
         
         return x
 
-def q_resmlp_v3(model):
+def q_resmlp_v2_5(model):
     net = Q_ResMLP24(model)
     return net
