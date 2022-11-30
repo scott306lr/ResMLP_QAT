@@ -8,3 +8,5 @@ from .q_resmlp_v2 import *
 
 from .resmlp_v3 import *
 from .q_resmlp_v3 import *
+
+from .q_resmlp_v2_5 import *

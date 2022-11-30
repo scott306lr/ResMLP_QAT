@@ -62,7 +62,7 @@ class Q_Mlp(nn.Module):
         x, a_s = self.fc2(x, a_s)
         return x, a_s
 
-QUANT_LAYERS = 5
+QUANT_LAYERS = 24
 class QLayer_Block(nn.Module):
     def __init__(self, block, layer, res_to_bit):
         super(QLayer_Block, self).__init__()
@@ -71,7 +71,9 @@ class QLayer_Block(nn.Module):
         self.set_param(block, layer)
 
     def set_param(self, block, layer):  
-        self.crossPatch = QCrossPatch([block.norm1, block.attn, block.gamma_1])
+        # self.crossPatch = QCrossPatch([block.norm1, block.attn, block.gamma_1])
+        self.inner = QLinearInner([block.norm1, block.attn, block.gamma_1])
+        self.outer = QLinearOuter([block.norm1, block.attn, block.gamma_1])
 
         self.add_1 = QResAct(to_bit=self.res_to_bit)
 
@@ -108,7 +110,10 @@ class QLayer_Block(nn.Module):
         org_x, org_a_s = x, a_s
 
         # ----- Cross-patch sublayer ----- START
-        x, a_s = self.crossPatch(x, a_s)
+        # x, a_s = self.crossPatch(x, a_s)
+        x, a_s = self.inner(x, a_s)
+        x, a_s = self.outer(x, a_s)
+        
         x, a_s = self.add_1(x, a_s, org_x, org_a_s)
         # ----- Cross-patch sublayer ----- END
         org_x, org_a_s = x, a_s
@@ -144,7 +149,7 @@ class Q_ResMLP24(nn.Module):
         scales += self.quant_patch.get_scales()
 
         for i, blk in enumerate(self.blocks):
-            # if i >= ALL_FP_LAYER-1 and i <= ALL_FP_LAYER+1 : 
+            # if i >= ALL_FP_LAYER-1 and i <= ALL_FP_LAYER+1 :
             scales += blk.get_scales()
 
         return scales
