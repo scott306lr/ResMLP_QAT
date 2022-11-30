@@ -1,4 +1,4 @@
-from ..quantization.data_utils import calibrate, getTrainData
+from ..data_utils import calibrate, getTrainData
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -26,6 +26,9 @@ def my_boxplot(data, labels, name, ax, total=None, sep_interval=None):
         fig, ax = plt.subplots(1,1, figsize=(20, 5))
         
     ax.boxplot(data, labels=labels)
+    # ax.violinplot(data, showmedians=True, showextrema=True)
+    # ax.get_xticklabels()(range(1, len(labels) + 1), labels, rotation=30)
+    # ax.set_xticklabels(labels, rotation=30)
     ymin, ymax = ax.get_ylim()
     ax.set_title(name, size=30)
     ax.tick_params(labelrotation=30)
@@ -53,7 +56,7 @@ def layer_dist(model, start, end, show_layers=None, type="weight", name="Distrib
                     continue
             else: raise NameError(f'Type:{type} not found')
 
-            data.append(val.detach().numpy().flatten())
+            data.append(val[val.nonzero(as_tuple=True)].detach().numpy().flatten())
             labels.append(n)
 
     my_boxplot(data, labels, name, ax, total=len(labels), sep_interval=(len(labels) // (end-start+1)))
