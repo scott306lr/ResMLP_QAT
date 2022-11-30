@@ -46,14 +46,17 @@ class layers_scale_mlp_blocks(nn.Module):
         self.inner = Inner()
         self.outer = Outer()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+        self.norm2 = nn.Linear(dim, dim, bias=False)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
+        self.gamma_2 = nn.Linear(dim, dim, bias=False)
 
     def forward(self, x):
         residual = x
         x = torch.add(residual, self.drop_path(self.outer(self.inner(x))))
         
         residual = x
-        x = torch.add(residual, self.drop_path(self.mlp(x)))
+        x = torch.add(residual, self.drop_path(self.gamma_2(self.mlp(self.norm_2(x)))))
         return x 
 
 
@@ -126,14 +129,14 @@ class resmlp_models(nn.Module):
         return x 
   
 @register_model
-def resmlp_24_v3(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs):
+def resmlp_24_v4(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
         init_scale=1e-5,**kwargs)
     model.default_cfg = _cfg()
     if pretrained:
-        checkpoint = torch.load("fin_S24_ReLU.pth", map_location='cpu')
+        checkpoint = torch.load("ResMLP_S24_ReLU_v4.pth", map_location='cpu')
         
         modified_ckpt={}
         for k, v in checkpoint.items():
