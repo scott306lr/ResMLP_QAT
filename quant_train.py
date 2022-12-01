@@ -23,7 +23,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
 from src.data_utils import AverageMeter, ProgressMeter
-from src.post_quant.cle import cle_for_resmlp#, cle_for_resmlp_v3
+from src.post_quant.cle import cle_for_resmlp, cle_for_resmlp_v3, cle_for_resmlp_v4
 from src.post_quant.rca import rca_for_resmlp
 from src.models import *
 from timm.scheduler.cosine_lr import CosineLRScheduler
@@ -172,8 +172,8 @@ parser.add_argument('--inner-wd', default=1e-4, type=float,
                     metavar='IN_W', help='weight decay for inner bias (default: 1e-4)')
 best_acc1 = 0
 
-arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24, 'q_resmlp_v3': resmlp_24, 'q_resmlp_v2_5': resmlp_24}
-quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2, 'q_resmlp_v3': q_resmlp_v3, 'q_resmlp_v2_5': q_resmlp_v2_5}
+arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24, 'q_resmlp_v3': resmlp_24, 'q_resmlp_v4': resmlp_24_v4}
+quantize_arch_dict = {'q_resmlp': q_resmlp, 'q_resmlp_norm': q_resmlp_norm, 'q_resmlp_v2': q_resmlp_v2, 'q_resmlp_v3': q_resmlp_v3, 'q_resmlp_v4': q_resmlp_v4}
 
 args = parser.parse_args()
 if not os.path.exists(args.save_path):
@@ -240,10 +240,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.cle:
         logging.info("=> Applying CLE on model")
-        # if args.arch == "q_resmlp_v3":
-        #     cle_for_resmlp_v3(model)
-        # else:
-        cle_for_resmlp(model)
+        if args.arch == "q_resmlp_v4":
+            cle_for_resmlp_v4(model)
+        else:
+            cle_for_resmlp(model)
     
 
     # TODO: rca calibration
