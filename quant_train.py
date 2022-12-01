@@ -168,6 +168,8 @@ parser.add_argument('--rca',
 parser.add_argument('--wandb',
                     action='store_true',
                     help='if set to true, log with wandb')
+parser.add_argument('--inner-wd', default=1e-4, type=float,
+                    metavar='IN_W', help='weight decay for inner bias (default: 1e-4)')
 best_acc1 = 0
 
 arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24, 'q_resmlp_v3': resmlp_24, 'q_resmlp_v4': resmlp_24_v4}
@@ -340,18 +342,21 @@ def main_worker(gpu, ngpus_per_node, args):
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    
     
     # enlarge weight decay for inner linear's bias
-    # if args.arch == "q_resmlp_v3":
-    #     optimizer = torch.optim.SGD([
-    #             {'params': (p for name, p in model.named_parameters() if 'bias' not in name), 'weight_decay': 0.0001},
-    #             {'params': (p for name, p in model.named_parameters() if 'bias' in name)}
-    #         ]
+    if args.arch == "q_resmlp_v3":
+        optimizer = torch.optim.SGD([
+            {'params': (p for name, p in model.named_parameters() if "inner.bias" not in name), 'weight_decay': args.weight_decay},
+            {'params': (p for name, p in model.named_parameters() if "inner.bias" in name), 'weight_decay': args.inner_wd}
+        ], 
+        lr=args.lr,
+        momentum=args.momentum)
 
-    #     )
+    else:
+        optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                    momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
     
     scheduler = CosineLRScheduler(optimizer, t_initial=args.epochs)
     cudnn.benchmark = True
