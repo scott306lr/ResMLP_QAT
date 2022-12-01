@@ -1,6 +1,6 @@
 import torch
 from torch import Tensor
-from torch.optim import Optimizer, required, _use_grad_for_differentiable
+from torch.optim.optimizer import Optimizer, required, _use_grad_for_differentiable
 from typing import List, Optional
 
 __all__ = ['SGD_KURE', 'sgd_kure']
@@ -226,6 +226,7 @@ def _single_tensor_sgd(params: List[Tensor],
         if weight_decay != 0:
             d_p = d_p.add(param, alpha=weight_decay)
         
+        #! somewhere implemented wrong.
         if kurtosis_lambda != 0:
             var, mean = torch.var_mean(param)
             std4 = var * var
@@ -236,6 +237,7 @@ def _single_tensor_sgd(params: List[Tensor],
 
             kurt = 8 * dif3 * (-kurtosis_target*std4 + dif4) / std8
             d_p = d_p.add(kurt, alpha=kurtosis_lambda)
+            # print("kurt: ", kurt)
 
         if momentum != 0:
             buf = momentum_buffer_list[i]

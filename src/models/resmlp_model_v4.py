@@ -26,23 +26,18 @@ def Affine(dim):
     return nn.Linear(dim, dim)
 
 class Inner(nn.Module):
-    def __init__(self, in_features, out_features):
+    def __init__(self):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.weight = nn.Parameter(torch.ones(in_features, in_features))
-        self.bias = nn.Parameter(torch.zeros(out_features, in_features))
+        self.weight = nn.Parameter(torch.ones(384, 384))
+        self.bias = nn.Parameter(torch.zeros(196,384))
 
     def forward(self, x):
-        return x @ self.weight + self.bias
+        return x @ self.weight  + self.bias
     
 class Outer(nn.Module):
-    def __init__(self, in_features, out_features):
+    def __init__(self):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.weight = nn.Parameter(torch.ones(out_features, in_features))
-        self.register_parameter('bias', None)
+        self.weight = nn.Parameter(torch.ones(196,196))
 
     def forward(self, x):
         return self.weight @ x
@@ -51,8 +46,8 @@ class layers_scale_mlp_blocks(nn.Module):
 
     def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4,num_patches = 196):
         super().__init__()
-        self.inner = Inner(dim, num_patches)
-        self.outer = Outer(num_patches, num_patches)
+        self.inner = Inner()
+        self.outer = Outer()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
         self.norm2 = nn.Linear(dim, dim)
