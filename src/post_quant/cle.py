@@ -22,8 +22,8 @@ def cross_layer_equalization(linear_layer_pairs):
 
                 m1.weight.data.div_(S.view(-1, 1))
                 if m1.bias is not None:
-                    m1.bias.div_(S)
-                m2.weight.mul_(S)
+                    m1.bias.data.div_(S)
+                m2.weight.data.mul_(S)
 
     return linear_layer_pairs
 
@@ -56,6 +56,16 @@ def cle_for_resmlp_v4(model):
             (linear_layers[3 + i*6], linear_layers[4 + i*6]),
             (linear_layers[4 + i*6], linear_layers[5 + i*6]),
         ])
+
+        (n1, m1), (n2, m2) = linear_layers[0 + i*6], linear_layers[1 + i*6]
+
+        r1 = m1.weight.abs().max()
+        r2 = m2.weight.abs().max()
+        sT = torch.sqrt(r1*r2)/r2
+
+        m1.weight.data.div_(sT)
+        m1.bias.data.div_(sT)
+        m2.weight.data.mul_(sT)
 
 #! Need an additional Linear layer after conv, for it to work on ResMLP
 # def res_cle(left_layers, right_layers): 

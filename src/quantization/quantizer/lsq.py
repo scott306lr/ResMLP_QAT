@@ -299,7 +299,7 @@ class QResAct(_QBase):
             # align residual input and quantize
             self.S_res = res_a_s
             self.S_cur = a_s
-            self.align_int = round_pass((res_a_s/a_s))#.clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
+            self.align_int = round_pass(res_a_s/a_s)#.clamp(self.Qn, self.Qp) #! This clamping limits align range, for experiments without limitation, pls remove.
             res_x_align = round_pass((res_x_q * self.align_int)).clamp(self.rQn, self.rQp)
             
             # obtain sum
