@@ -351,6 +351,48 @@ def init_scale_counter(model):
     print(f"Reset {cnt} counters.")
 
 #! Experimental, used for Hardware-Aware ResMLP
+class QInner(QLinear):
+    def __init__(self, inner: nn.Linear, bias_bit=32, to_bit=8, training=True):
+        QLinear.__init__(self, inner, bias_bit, to_bit, training)
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+    
+    def inherit_layer(self, inner: nn.Linear):
+        self.weight = Parameter(inner.weight)
+        self.bias = Parameter(inner.bias)
+
+        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
+        self.register_buffer('b_int', torch.zeros_like(self.bias.data))
+
+    def inference(self, x: torch.Tensor):
+        return x @ self.w_int + self.b_int
+    
+    def test(self, x_q, b_s):
+        return (x_q @ self.w_int)*b_s + self.bias, b_s
+    
+    # def forward(self, x, a_s):
+    #     return x @ self.weight + self.bias, None#torch.ones_like(a_s)
+
+class QOuter(QLinear):
+    def __init__(self, outer: nn.Linear, bias_bit=32, to_bit=8, training=True):
+        QLinear.__init__(self, outer, bias_bit, to_bit, training)
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+
+    def inherit_layer(self, outer: nn.Linear):
+        # self.in_features = attn.in_features
+        # self.out_features = attn.out_features
+        self.weight = Parameter(outer.weight.data, requires_grad=False)
+        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
+
+        self.register_parameter('bias', None)
+        self.register_buffer('b_int', None)
+            
+    def inference(self, x: torch.Tensor):
+        return self.w_int @ x
+    
+    def test(self, x_q, b_s):
+        return (self.w_int @ x_q)*b_s, b_s
+
+
 class QLinearInner(QLinear):
     def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, linears, bias_bit, to_bit, training)

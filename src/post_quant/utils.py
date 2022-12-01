@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 
 from ..quantization.quantizer.lsq import QLinear, _QBase
-from ..models.resmlp_v3 import Inner, Outer
+# from ..models.resmlp_v3 import Inner, Outer
+from ..models.resmlp_model_v4 import Inner, Outer
 
 
 def get_linear_layers(model, specify_names=None, prefix=""):

@@ -46,6 +46,17 @@ def cle_for_resmlp_v3(model):
             (linear_layers[2 + i*4], linear_layers[3 + i*4]),
         ])
 
+def cle_for_resmlp_v4(model):
+    # todo_layer = model.blocks[0]
+    linear_layers = get_linear_layers(model.blocks) # 7 * 24
+    for i in range(0, 24):
+        # print(linear_layers)
+        cross_layer_equalization([
+            (linear_layers[2 + i*6], linear_layers[3 + i*6]),
+            (linear_layers[3 + i*6], linear_layers[4 + i*6]),
+            (linear_layers[4 + i*6], linear_layers[5 + i*6]),
+        ])
+
 #! Need an additional Linear layer after conv, for it to work on ResMLP
 # def res_cle(left_layers, right_layers): 
 #     eps=1e-8
