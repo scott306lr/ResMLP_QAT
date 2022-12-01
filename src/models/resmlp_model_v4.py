@@ -144,8 +144,8 @@ def resmlp_24_v4(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **
         init_scale=1e-5,**kwargs)
     model.default_cfg = _cfg()
     if pretrained:
-        checkpoint = torch.load("v3/decayed.pth", map_location='cpu')["model"]
-        # checkpoint = torch.load("v3/folder_wd1/best_checkpoint.pth", map_location='cpu')["model"]
+        # checkpoint = torch.load("v3/decayed.pth", map_location='cpu')["model"]
+        checkpoint = torch.load("v3/folder_sgd/best_checkpoint.pth", map_location='cpu')["model"]
         
         # modified_ckpt={}
         # for k, v in checkpoint.items():
