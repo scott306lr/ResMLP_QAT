@@ -13,15 +13,18 @@ __all__ = [
     'resmlp_24_v4'
 ]
 
-class Affine(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.alpha = nn.Parameter(torch.ones(dim))
-        self.beta = nn.Parameter(torch.zeros(dim))
+# class Affine(nn.Module):
+#     def __init__(self, dim):
+#         super().__init__()
+#         self.alpha = nn.Parameter(torch.ones(dim))
+#         self.beta = nn.Parameter(torch.zeros(dim))
 
-    def forward(self, x):
-        return self.alpha * x + self.beta 
-        
+#     def forward(self, x):
+#         return self.alpha * x + self.beta 
+
+def Affine(dim):
+    return nn.Linear(dim, dim)
+
 class Inner(nn.Module):
     def __init__(self):
         super().__init__()
@@ -41,13 +44,13 @@ class Outer(nn.Module):
     
 class layers_scale_mlp_blocks(nn.Module):
 
-    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.GELU,init_values=1e-4,num_patches = 196):
+    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4,num_patches = 196):
         super().__init__()
         self.inner = Inner()
         self.outer = Outer()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
-        self.norm2 = nn.Linear(dim, dim, bias=False)
+        self.norm2 = nn.Linear(dim, dim)
         self.mlp = Mlp(in_features=dim, hidden_features=int(4.0 * dim), act_layer=act_layer, drop=drop)
         self.gamma_2 = nn.Linear(dim, dim, bias=False)
 
@@ -56,7 +59,7 @@ class layers_scale_mlp_blocks(nn.Module):
         x = torch.add(residual, self.drop_path(self.outer(self.inner(x))))
         
         residual = x
-        x = torch.add(residual, self.drop_path(self.gamma_2(self.mlp(self.norm_2(x)))))
+        x = torch.add(residual, self.drop_path(self.gamma_2(self.mlp(self.norm2(x)))))
         return x 
 
 
