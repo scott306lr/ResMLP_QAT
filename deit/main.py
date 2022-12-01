@@ -26,7 +26,7 @@ from samplers import RASampler
 from augment import new_data_aug_generator
 
 import resmlp_affine
-import resmlp_model_v4
+from kure import SGD_KURE
 
 import utils
 
@@ -359,8 +359,13 @@ def main(args):
     if not args.unscale_lr:
         linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
         args.lr = linear_scaled_lr
-    optimizer = create_optimizer(args, model_without_ddp)
-    loss_scaler = NativeScaler()
+    # optimizer = create_optimizer(args, model_without_ddp)
+    optimizer = SGD_KURE([
+            {'params': (p for name, p in model.named_parameters() if "inner.bias" not in name), 'weight_decay': args.weight_decay},
+            {'params': (p for name, p in model.named_parameters() if "inner.bias" in name), 'weight_decay': 1}
+        ],
+        lr=args.lr, momentum=args.momentum, kurtosis_lambda=1, kurtosis_target=1.8, loss_scaler = NativeScaler())
+        
 
     lr_scheduler, _ = create_scheduler(args, optimizer)
 

@@ -262,21 +262,6 @@ def _single_tensor_adamw(params: List[Tensor],
         # Perform stepweight decay
         param.mul_(1 - lr * weight_decay)
 
-        # Perform KURE
-        var, mean = torch.var_mean(param)
-        std4 = var * var
-        std8 = std4 * std4
-        dif = param - mean
-        dif3 = dif * dif * dif
-        dif4 = dif3 * dif
-
-        kurtosis_target=1.8
-        kurtosis_lambda=1.0
-        kurt = 8 * dif3 * (-kurtosis_target*std4 + dif4) / std8
-        d_p = d_p.add(kurt, alpha=kurtosis_lambda)
-        param.mul_(1 - lr * weight_decay)
-        
-
         # Decay the first and second moment running average coefficient
         exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
         exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
