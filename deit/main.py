@@ -280,6 +280,10 @@ def main(args):
         img_size=args.input_size
     )
     # cle_for_resmlp_v3(model)
+
+    if args.model == "resmlp_24_v4":
+        for i in range(24):
+            model.blocks[i].outer.weight.requires_grad = False
                     
     if args.finetune:
         if args.finetune.startswith('https'):
@@ -363,7 +367,7 @@ def main(args):
     # optimizer = create_optimizer(args, model_without_ddp)
     optimizer = SGD_KURE([
             {'params': (p for name, p in model_without_ddp.named_parameters() if "inner.bias" not in name), 'weight_decay': args.weight_decay},
-            {'params': (p for name, p in model_without_ddp.named_parameters() if "inner.bias" in name), 'weight_decay': 1}
+            {'params': (p for name, p in model_without_ddp.named_parameters() if "inner.bias" in name), 'weight_decay': args.weight_decay*100}
         ],
         lr=args.lr, momentum=args.momentum, kurtosis_lambda=0, kurtosis_target=1.8) #! disabled kure currently.
     loss_scaler = NativeScaler()
