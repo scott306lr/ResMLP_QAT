@@ -26,11 +26,12 @@ from samplers import RASampler
 from augment import new_data_aug_generator
 
 import resmlp_affine
+import resmlp_model_v4
 
 import utils
 
-from src.models import q_resmlp_v2
-from src.post_quant.cle import cle_for_resmlp_v3
+# from src.models import q_resmlp_v2
+# from src.post_quant.cle import cle_for_resmlp_v3
 
 
 def get_args_parser():
