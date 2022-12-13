@@ -27,7 +27,7 @@ from augment import new_data_aug_generator
 
 import resmlp_affine
 from kure import SGD_KURE
-import resmlp_model_v4
+import resmlp_model_tight
 
 import utils
 
@@ -194,6 +194,8 @@ def get_args_parser():
     # parser.add_argument("--local_rank", type=int, default=0)
     # if 'LOCAL_RANK' not in os.environ:
     #     os.environ['LOCAL_RANK'] = str(args.local_rank)
+    parser.add_argument('--reinit-layer', default=[], type=int, nargs='+', help='reinit layers')
+
     return parser
 
 
@@ -284,6 +286,13 @@ def main(args):
     # if args.model == "resmlp_24_v4":
     #     for i in range(24):
     #         model.blocks[i].outer.weight.requires_grad = False
+
+    if args.reinit_layers.empty == False:
+        for i in args.reinit_layers:
+            in_features = model.blocks[i].inner.in_features
+            model.blocks[i].inner = torch.nn.Linear(in_features, in_features, bias=True)
+            model.blocks[i].inner.weight = torch.nn.Parameter(torch.eye(in_features))
+
                     
     if args.finetune:
         if args.finetune.startswith('https'):
@@ -293,33 +302,6 @@ def main(args):
             checkpoint = torch.load(args.finetune, map_location='cpu')
 
         checkpoint_model = checkpoint['model']
-        # state_dict = model.state_dict()
-        # for k in ['head.weight', 'head.bias', 'head_dist.weight', 'head_dist.bias']:
-        #     if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-        #         print(f"Removing key {k} from pretrained checkpoint")
-        #         del checkpoint_model[k]
-
-        # # interpolate position embedding
-        # pos_embed_checkpoint = checkpoint_model['pos_embed']
-        # embedding_size = pos_embed_checkpoint.shape[-1]
-        # num_patches = model.patch_embed.num_patches
-        # num_extra_tokens = model.pos_embed.shape[-2] - num_patches
-        # # height (== width) for the checkpoint position embedding
-        # orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
-        # # height (== width) for the new position embedding
-        # new_size = int(num_patches ** 0.5)
-        # # class_token and dist_token are kept unchanged
-        # extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
-        # # only the position tokens are interpolated
-        # pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
-        # pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
-        # pos_tokens = torch.nn.functional.interpolate(
-        #     pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
-        # pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
-        # new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
-        # checkpoint_model['pos_embed'] = new_pos_embed
-
-
         model.load_state_dict(checkpoint_model, strict=True)
         
     if args.attn_only:

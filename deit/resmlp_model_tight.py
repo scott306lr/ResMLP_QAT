@@ -2,7 +2,9 @@
 # All rights reserved.
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 from functools import partial
+import math
 
 from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
 from timm.models.registry import register_model
@@ -10,7 +12,7 @@ from timm.models.layers import trunc_normal_,  DropPath
 
 
 __all__ = [
-    'resmlp_24_v4'
+    'resmlp_tight_24'
 ]
 
 # class Affine(nn.Module):
@@ -26,18 +28,33 @@ def Affine(dim):
     return nn.Linear(dim, dim)
 
 class Inner(nn.Module):
-    def __init__(self):
+    def __init__(self, in_features, out_features):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(384, 384))
-        self.bias = nn.Parameter(torch.zeros(196,384))
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.ones(in_features, in_features))
+        self.bias = nn.Parameter(torch.zeros(out_features, in_features))
 
+    def reset_parameters(self) -> None:
+        # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
+        # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
+        # https://github.com/pytorch/pytorch/issues/57109
+        init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            init.uniform_(self.bias, -bound, bound)
+            
     def forward(self, x):
-        return x @ self.weight  + self.bias
+        return x @ self.weight + self.bias
     
 class Outer(nn.Module):
-    def __init__(self):
+    def __init__(self, in_features, out_features):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(196,196))
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.ones(out_features, in_features))
+        self.register_parameter('bias', None)
 
     def forward(self, x):
         return self.weight @ x
@@ -46,8 +63,8 @@ class layers_scale_mlp_blocks(nn.Module):
 
     def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.ReLU, init_values=1e-4,num_patches = 196):
         super().__init__()
-        self.inner = Inner()
-        self.outer = Outer()
+        self.inner = Inner(dim, num_patches)
+        self.outer = Outer(num_patches, num_patches)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
         self.norm2 = nn.Linear(dim, dim)
@@ -132,7 +149,7 @@ class resmlp_models(nn.Module):
         return x 
   
 @register_model
-def resmlp_24_v4(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs):
+def resmlp_tight_24(pretrained=False,dist=False,dino=False,pretrained_cfg=False, **kwargs):
     model = resmlp_models(
         patch_size=16, embed_dim=384, depth=24,
         Patch_layer=PatchEmbed,
