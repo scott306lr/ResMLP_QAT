@@ -211,7 +211,7 @@ class QAct(_QBase):
         _QBase.__init__(self, to_bit, training)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
+        self.observer = LSQObserver(mode='lab', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
         self.register_buffer('s', torch.tensor(0))
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
@@ -264,7 +264,7 @@ class QResAct(_QBase):
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lsq', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
+        self.observer = LSQObserver(mode='lab', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
         
         self.register_buffer('align_int', torch.tensor(0))
         self.register_buffer('s', torch.tensor(0))
@@ -299,7 +299,7 @@ class QResAct(_QBase):
             # align residual input and quantize
             self.S_res = res_a_s
             self.S_cur = a_s
-            self.align_int = round_pass((res_a_s/a_s).clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
+            self.align_int = round_pass((res_a_s/a_s))#.clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
             res_x_align = round_pass((res_x_q * self.align_int)).clamp(self.rQn, self.rQp)
             
             # obtain sum
@@ -357,6 +357,8 @@ class QInner(QLinear):
         self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
     
     def inherit_layer(self, inner: nn.Linear):
+        self.in_features = inner.in_features
+        self.out_features = inner.out_features
         self.weight = Parameter(inner.weight)
         self.bias = Parameter(inner.bias)
 
@@ -378,8 +380,8 @@ class QOuter(QLinear):
         self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
 
     def inherit_layer(self, outer: nn.Linear):
-        # self.in_features = attn.in_features
-        # self.out_features = attn.out_features
+        self.in_features = outer.in_features
+        self.out_features = outer.out_features
         self.weight = Parameter(outer.weight.data, requires_grad=False)
         self.register_buffer('w_int', torch.zeros_like(self.weight.data))
 
