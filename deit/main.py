@@ -42,6 +42,11 @@ def get_args_parser():
     parser.add_argument('--bce-loss', action='store_true')
     parser.add_argument('--unscale-lr', action='store_true')
 
+    parser.add_argument('--data-percentage',
+                    type=float,
+                    default=1,
+                    help='data percentage of training data')
+
     # Model parameters
     parser.add_argument('--model', default='deit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
@@ -194,9 +199,29 @@ def get_args_parser():
     # parser.add_argument("--local_rank", type=int, default=0)
     # if 'LOCAL_RANK' not in os.environ:
     #     os.environ['LOCAL_RANK'] = str(args.local_rank)
-    parser.add_argument('--reinit-layer', default=[], type=int, nargs='+', help='reinit layers')
+    parser.add_argument('--reinit-layers', default=[], type=int, nargs='+', help='reinit layers')
+    parser.add_argument('--load-reinit-layers', default=[], type=int, nargs='+', help='load reinit layers')
+    parser.add_argument('--layerwise-init',
+                    action='store_true',
+                    help='if set to true, start layerwise initialization.')
+    
 
     return parser
+
+def inner_to_linear(model, layer_num):
+    in_features = model.blocks[layer_num].inner.in_features
+    model.blocks[layer_num].inner = torch.nn.Linear(in_features, in_features, bias=True)
+    model.blocks[layer_num].inner.weight = torch.nn.Parameter(torch.eye(in_features))
+        
+def layerwise_init(model, layer_num):
+    in_features = model.blocks[layer_num].inner.in_features
+    weight = model.blocks[layer_num].inner.weight.data
+    model.blocks[layer_num].inner = torch.nn.Linear(in_features, in_features, bias=True)
+    model.blocks[layer_num].inner.weight = torch.nn.Parameter(weight)
+
+    model.blocks[layer_num].inner.weight.requires_grad = True
+    model.blocks[layer_num].inner.bias.requires_grad = True
+    model.blocks[layer_num].outer.weight.requires_grad = True
 
 
 def main(args):
@@ -207,6 +232,7 @@ def main(args):
     if args.distillation_type != 'none' and args.finetune and not args.eval:
         raise NotImplementedError("Finetuning with distillation not yet supported")
 
+    args.device = args.gpu
     device = torch.device(args.device)
     print(device)
 
@@ -219,6 +245,10 @@ def main(args):
     cudnn.benchmark = True
 
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
+    dataset_length = int(len(dataset_train) * args.data_percentage)
+    partial_train_dataset, _ = torch.utils.data.random_split(dataset_train,
+                                                                 [dataset_length, len(dataset_train) - dataset_length])
+    dataset_train  = partial_train_dataset                                                           
     dataset_val, _ = build_dataset(is_train=False, args=args)
 
     if True:  # args.distributed:
@@ -252,6 +282,7 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True,
     )
+
     if args.ThreeAugment:
         data_loader_train.dataset.transform = new_data_aug_generator(args)
 
@@ -287,11 +318,31 @@ def main(args):
     #     for i in range(24):
     #         model.blocks[i].outer.weight.requires_grad = False
 
-    if args.reinit_layers.empty == False:
-        for i in args.reinit_layers:
-            in_features = model.blocks[i].inner.in_features
-            model.blocks[i].inner = torch.nn.Linear(in_features, in_features, bias=True)
-            model.blocks[i].inner.weight = torch.nn.Parameter(torch.eye(in_features))
+    # if args.reinit_layers:
+    #     if args.load_reinit_layers:
+    #         for i in args.load_reinit.layers:
+    #             in_features = model.blocks[i].inner.in_features
+    #             model.blocks[i].inner = torch.nn.Linear(in_features, in_features, bias=True)
+    #             model.blocks[i].inner.weight = torch.nn.Parameter(torch.eye(in_features))
+            
+    #         checkpoint = torch.load(args.finetune, map_location='cpu')
+    #         checkpoint_model = checkpoint['model']
+    #         model.load_state_dict("folder/reinit", strict=True)
+
+    #     for i in args.reinit_layers:
+    #         in_features = model.blocks[i].inner.in_features
+    #         model.blocks[i].inner = torch.nn.Linear(in_features, in_features, bias=True)
+    #         model.blocks[i].inner.weight = torch.nn.Parameter(torch.eye(in_features))
+        
+    #     for n, m in model.named_parameters():
+    #         m.requires_grad = False
+
+    #     for i in args.reinit_layers:
+    #         model.blocks[i].inner.weight.requires_grad = True
+    #         model.blocks[i].inner.bias.requires_grad = True
+    #         model.blocks[i].outer.weight.requires_grad = True
+        
+        
 
                     
     if args.finetune:
@@ -346,14 +397,14 @@ def main(args):
     if not args.unscale_lr:
         linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
         args.lr = linear_scaled_lr
-    # optimizer = create_optimizer(args, model_without_ddp)
-    optimizer = SGD_KURE([
-            {'params': (p for name, p in model_without_ddp.named_parameters() if "inner.bias" not in name and "outer.weight" not in name), 'weight_decay': args.weight_decay, 'lr': args.lr},
-            {'params': (p for name, p in model_without_ddp.named_parameters() if "inner.bias" in name), 'weight_decay': args.weight_decay*10, 'lr': args.lr},
-            {'params': (p for name, p in model_without_ddp.named_parameters() if "outer.weight" in name), 'weight_decay': args.weight_decay, 'lr': args.lr*1e-2},
-        ],
-        # lr=args.lr, 
-        momentum=args.momentum, kurtosis_lambda=0, kurtosis_target=1.8) #! disabled kure currently.
+    optimizer = create_optimizer(args, model_without_ddp)
+    # optimizer = SGD_KURE([
+    #         {'params': (p for name, p in model_without_ddp.named_parameters() if "inner.bias" not in name and "outer.weight" not in name), 'weight_decay': args.weight_decay, 'lr': args.lr},
+    #         {'params': (p for name, p in model_without_ddp.named_parameters() if "inner.bias" in name), 'weight_decay': args.weight_decay*20, 'lr': args.lr*2},
+    #         {'params': (p for name, p in model_without_ddp.named_parameters() if "outer.weight" in name), 'weight_decay': args.weight_decay*1e-1, 'lr': args.lr*1e-1},
+    #     ],
+    #     # lr=args.lr, 
+    #     momentum=args.momentum, kurtosis_lambda=0, kurtosis_target=1.8) #! disabled kure currently.
     loss_scaler = NativeScaler()
         
 
@@ -438,6 +489,22 @@ def main(args):
     start_time = time.time()
     max_accuracy = 0.0
     for epoch in range(args.start_epoch, args.epochs):
+        if args.layerwise_init:
+            # if epoch == 0:
+            #     for n, m in model.named_parameters():
+            #         m.requires_grad = False
+
+            if epoch >= 0 and epoch < 24:
+                for n, m in model.named_parameters():
+                    m.requires_grad = False
+                modify_layer = epoch
+                inner_to_linear(model_without_ddp, layer_num=modify_layer)
+                layerwise_init(model_without_ddp, layer_num=modify_layer)
+                print(f"Replaced layer[{modify_layer}]'s Inner. Freezed all other layers.")
+            else:
+                print("All layers are already replaced. Train whole model directly.")
+            model.to(device)
+
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
@@ -450,7 +517,14 @@ def main(args):
             args = args,
         )
 
-        lr_scheduler.step(epoch)
+        if args.layerwise_init:
+            if epoch-args.warmup_epochs < 24:
+                pass
+            else:
+                lr_scheduler.step(epoch-24)
+        else:
+            lr_scheduler.step(epoch)
+
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             for checkpoint_path in checkpoint_paths:
@@ -459,7 +533,7 @@ def main(args):
                     'optimizer': optimizer.state_dict(),
                     'lr_scheduler': lr_scheduler.state_dict(),
                     'epoch': epoch,
-                    'model_ema': get_state_dict(model_ema),
+                    # 'model_ema': get_state_dict(model_ema),
                     'scaler': loss_scaler.state_dict(),
                     'args': args,
                 }, checkpoint_path)
@@ -478,7 +552,7 @@ def main(args):
                         'optimizer': optimizer.state_dict(),
                         'lr_scheduler': lr_scheduler.state_dict(),
                         'epoch': epoch,
-                        'model_ema': get_state_dict(model_ema),
+                        # 'model_ema': get_state_dict(model_ema),
                         'scaler': loss_scaler.state_dict(),
                         'args': args,
                     }, checkpoint_path)
