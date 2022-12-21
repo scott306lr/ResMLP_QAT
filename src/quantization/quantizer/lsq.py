@@ -110,8 +110,7 @@ class QLinear(_QBase):
 
 
     def __repr__(self):
-        s = super(QLinear, self).__repr__()
-        s = f'{s}({self.in_features}, {self.out_features}, bias_bit={self.bias_bit})'
+        s = f'({self.in_features}, {self.out_features}, bias_bit={self.bias_bit})'
         return s
 
     def inherit_layer(self, linear: nn.Linear):
@@ -176,8 +175,7 @@ class QConv(QLinear):
         QLinear.__init__(self, conv, bias_bit, to_bit, training)
     
     def __repr__(self):
-        s = super(QConv, self).__repr__()
-        s = f'{s}({self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, bias_bit={self.bias_bit})'
+        s = f'({self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, bias_bit={self.bias_bit})'
 
     def inherit_layer(self, conv: nn.Conv2d):
         self.in_channels = conv.in_channels
@@ -217,8 +215,7 @@ class QAct(_QBase):
         self.register_buffer('shift', torch.tensor(0))
 
     def __repr__(self):
-        s = super(QAct, self).__repr__()
-        s = f'{s}(to_bit={self.to_bit}, mult_bit={self.mult_bit})'
+        s = f'(to_bit={self.to_bit}, mult_bit={self.mult_bit})'
         return s
 
     def get_scales(self, name):
@@ -274,8 +271,7 @@ class QResAct(_QBase):
         
 
     def __repr__(self):
-        s = super(QResAct, self).__repr__()
-        s = f"({s} bias_bit={self.bias_bit}, mult_bit={self.mult_bit})"
+        s = f"(bias_bit={self.bias_bit}, mult_bit={self.mult_bit})"
         return s
 
     def get_scales(self, name):
