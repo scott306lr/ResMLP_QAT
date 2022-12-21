@@ -367,7 +367,7 @@ class QInner(QLinear):
     def inference(self, x: torch.Tensor):
         return x @ self.w_int + self.b_int
     
-    def test(self, x_q, b_s):
+    def light_quant(self, x_q, b_s):
         return (x_q @ self.w_int)*b_s + self.bias, b_s
     
     # def forward(self, x, a_s):
@@ -390,7 +390,7 @@ class QOuter(QLinear):
     def inference(self, x: torch.Tensor):
         return self.w_int @ x
     
-    def test(self, x_q, b_s):
+    def light_quant(self, x_q, b_s):
         return (self.w_int @ x_q)*b_s, b_s
 
 
@@ -425,7 +425,7 @@ class QLinearInner(QLinear):
     def inference(self, x: torch.Tensor):
         return x @ self.w_int + self.b_int
     
-    def test(self, x_q, b_s):
+    def light_quant(self, x_q, b_s):
         return (x_q @ self.w_int)*b_s + self.bias, b_s
     
     # def forward(self, x, a_s):
@@ -462,7 +462,7 @@ class QLinearOuter(QLinear):
     def inference(self, x: torch.Tensor):
         return self.w_int @ x
     
-    def test(self, x_q, b_s):
+    def light_quant(self, x_q, b_s):
         return (self.w_int @ x_q)*b_s, b_s
     
     # def forward(self, x, a_s):
@@ -501,11 +501,11 @@ class QCrossPatch(_QBase):
         self.register_buffer('b1_int', torch.zeros_like(B1.data))
         self.register_buffer('w2_int', torch.zeros_like(W2.data))
 
-    def test(self, x_q, b_s):
+    def light_quant(self, x_q, b_s):
         B1 = self.norm_b.repeat(196,1) @ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
         return (x_q @ self.w1_int) * b_s + B1, b_s
     
-    def test2(self, x_q, b_s):
+    def light_quant2(self, x_q, b_s):
         return (self.w2_int @ x_q) * b_s, b_s
 
     def inference(self, x: torch.Tensor):
