@@ -70,9 +70,9 @@ class LSQObserver(_Observer):
                 prev = self.scale.data
                 self.scale.data = self.scale_func(x)
                 std, mean = torch.std_mean(x[x.nonzero(as_tuple=True)])
-                print(f"\n{self.name}:")
-                print(f"\tinput val: std:{std}, mean:{mean}")
-                print(f"\tscale val: {self.scale.data}")
+                # print(f"\n{self.name}:")
+                # print(f"\tinput val: std:{std}, mean:{mean}")
+                # print(f"\tscale val: {self.scale.data}")
 
             else:
                 self.scale.data = (1-self.momentum)*self.scale.data + self.momentum*self.scale_func(x)
@@ -89,7 +89,7 @@ class _QBase(Module):
         super().__init__()
         self.Qn, self.Qp = signed_minmax(to_bit)
         self.to_bit = to_bit
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab1')
         self.training = training
 
     def extra_repr(self):
@@ -177,7 +177,7 @@ class QConv(QLinear):
     def __repr__(self):
         s = f'({self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, bias_bit={self.bias_bit})'
         return s
-        
+
     def inherit_layer(self, conv: nn.Conv2d):
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
@@ -210,7 +210,7 @@ class QAct(_QBase):
         _QBase.__init__(self, to_bit, training)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lab', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
+        self.observer = LSQObserver(mode='lab2', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
         self.register_buffer('s', torch.tensor(0))
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
@@ -261,7 +261,7 @@ class QResAct(_QBase):
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lab', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
+        self.observer = LSQObserver(mode='lab2', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
         
         self.register_buffer('align_int', torch.tensor(0))
         self.register_buffer('s', torch.tensor(0))
