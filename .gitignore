@@ -137,3 +137,9 @@ dmypy.json
 
 # wandb
 /wandb
+
+# tensorboard
+/runs
+
+# reports
+/reports
