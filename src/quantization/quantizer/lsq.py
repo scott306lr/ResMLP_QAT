@@ -176,7 +176,8 @@ class QConv(QLinear):
     
     def __repr__(self):
         s = f'({self.in_channels}, {self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, bias_bit={self.bias_bit})'
-
+        return s
+        
     def inherit_layer(self, conv: nn.Conv2d):
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
