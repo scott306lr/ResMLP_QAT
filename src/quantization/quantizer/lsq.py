@@ -129,7 +129,7 @@ class QLinear(_QBase):
     def inference(self, x: torch.Tensor):
         return F.linear(x, self.w_int, self.b_int)
 
-    def test(self, x_q, b_s):
+    def light_quant(self, x_q, b_s):
         return F.linear(x_q, self.w_int*b_s, self.bias), b_s
 
     def forward(self, x, a_s):
@@ -147,7 +147,7 @@ class QLinear(_QBase):
                 self.b_int = round_pass((self.bias / b_s).clamp(self.bQn, self.bQp))
             
             # return self.inference(x_q) * b_s, b_s
-            return self.test(x_q, b_s)
+            return self.light_quant(x_q, b_s)
         else:
             return self.inference(x), None
         
@@ -155,21 +155,21 @@ class QLinear(_QBase):
     #     return F.linear(x, self.weight, self.bias), a_s
 
 #TODO: bias correction & retain BN on train
-class QLinearBN(QLinear):
-    def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
-        QLinear.__init__(self, bn, bias_bit, to_bit, training)
+# class QLinearBN(QLinear):
+#     def __init__(self, bn: nn.BatchNorm1d, bias_bit=32, to_bit=8, training=True):
+#         QLinear.__init__(self, bn, bias_bit, to_bit, training)
     
-    def inherit_layer(self, bn: nn.BatchNorm1d):
-        self.in_features = bn.num_features
-        self.out_features = bn.num_features
+#     def inherit_layer(self, bn: nn.BatchNorm1d):
+#         self.in_features = bn.num_features
+#         self.out_features = bn.num_features
 
-        output_factor = bn.weight / torch.sqrt(bn.running_var + bn.eps)
-        weight = torch.diag(output_factor)
-        bias = - output_factor * bn.running_mean + bn.bias
-        self.weight = Parameter(weight)
-        self.bias = Parameter(bias)
-        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
-        self.register_buffer('b_int', torch.zeros_like(self.bias.data))
+#         output_factor = bn.weight / torch.sqrt(bn.running_var + bn.eps)
+#         weight = torch.diag(output_factor)
+#         bias = - output_factor * bn.running_mean + bn.bias
+#         self.weight = Parameter(weight)
+#         self.bias = Parameter(bias)
+#         self.register_buffer('w_int', torch.zeros_like(self.weight.data))
+#         self.register_buffer('b_int', torch.zeros_like(self.bias.data))
 
 class QConv(QLinear):
     def __init__(self, conv: nn.Conv2d, bias_bit=32, to_bit=8, training=True):
@@ -201,7 +201,7 @@ class QConv(QLinear):
     def inference(self, x: torch.Tensor):
         return F.conv2d(x, self.w_int, self.b_int, self.stride, self.padding, self.dilation, self.groups)
 
-    def test(self, x_q, b_s):
+    def light_quant(self, x_q, b_s):
         return F.conv2d(x_q, self.w_int*b_s, self.bias, self.stride, self.padding, self.dilation, self.groups), b_s
     # def forward(self, x, a_s):
     #     return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups), a_s
@@ -215,7 +215,6 @@ class QAct(_QBase):
         self.register_buffer('s', torch.tensor(0))
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
-        
 
     def __repr__(self):
         s = super(QAct, self).__repr__()
