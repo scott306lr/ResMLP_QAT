@@ -67,14 +67,24 @@ def get_scale_func(mode, Qn, Qp):
         def observer(x: torch.Tensor):
             y = x.detach()
             std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-            return torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
+            NUM = 8
+            return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp
         return observer
-    
+
     elif mode == "lab2":
         def observer(x: torch.Tensor):
             y = x.detach()
             std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-            return torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
+            NUM = 8
+            return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp
+        return observer
+    
+    elif mode == "lab3":
+        def observer(x: torch.Tensor):
+            y = x.detach()
+            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+            NUM = 30
+            return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp # >13
         return observer
 
     else:

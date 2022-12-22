@@ -350,7 +350,7 @@ def init_scale_counter(model):
 class QInner(QLinear):
     def __init__(self, inner: nn.Linear, bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, inner, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab1')
     
     def inherit_layer(self, inner: nn.Linear):
         self.in_features = inner.in_features
@@ -373,7 +373,7 @@ class QInner(QLinear):
 class QOuter(QLinear):
     def __init__(self, outer: nn.Linear, bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, outer, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab3')
 
     def inherit_layer(self, outer: nn.Linear):
         self.in_features = outer.in_features
@@ -394,7 +394,6 @@ class QOuter(QLinear):
 class QLinearInner(QLinear):
     def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, linears, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq')
     
     def inherit_layer(self, linears: List[nn.Linear]):
         norm, attn, gamma = linears[0], linears[1], linears[2]

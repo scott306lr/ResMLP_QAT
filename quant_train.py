@@ -170,6 +170,8 @@ parser.add_argument('--wandb',
                     help='if set to true, log with wandb')
 parser.add_argument('--inner-wd', default=1e-4, type=float,
                     metavar='IN_W', help='weight decay for inner bias (default: 1e-4)')
+parser.add_argument('--load_pretrain', default='', type=str, metavar='PATH',
+                    help='path to latest fp32 checkpoint (default: none)')
 best_acc1 = 0
 
 arch_dict = {'q_resmlp': resmlp_24, 'q_resmlp_norm': resmlp_24_norm, 'q_resmlp_v2': resmlp_24, 'q_resmlp_v3': resmlp_24, 'q_resmlp_v4': resmlp_24_v4}
@@ -237,6 +239,10 @@ def main_worker(gpu, ngpus_per_node, args):
         logging.info("=> creating model '{}'".format(args.arch))
         arch = arch_dict[args.arch]
         model = arch(pretrained=False)
+    
+    if args.load_pretrain:
+        logging.info("=> loading fp32 checkpoint '{}'".format(args.load_pretrain))
+        model.load_state_dict(torch.load(args.load_pretrain)['model'])
 
     if args.cle:
         logging.info("=> Applying CLE on model")
@@ -302,17 +308,6 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.resume:# and args.resume_quantize:
         if os.path.isfile(args.resume):
             logging.info("=> loading quantized checkpoint '{}'".format(args.resume))
-            # checkpoint = torch.load(args.resume)['state_dict']                                                                                                                                                                                                                                                                                                                                                                                                                          
-            # modified_dict = {}
-            # for key, value in checkpoint.items():
-            #     if 'num_batches_tracked' in key: continue
-            #     if 'weight_integer' in key: continue
-            #     if 'bias_integer' in key: continue
-
-            #     modified_key = key.replace("module.", "")
-            #     modified_dict[modified_key] = value
-            # model.load_state_dict(modified_dict, strict=False)
-            # print(torch.load(args.resume)['state_dict'])
             model.load_state_dict(torch.load(args.resume)['state_dict'])
         else:
             logging.info("=> no quantized checkpoint found at '{}'".format(args.resume))

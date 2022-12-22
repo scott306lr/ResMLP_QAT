@@ -32,9 +32,9 @@ def res_add_align(prev, prev_act, cur, add):
 # #5,  #13: add
 
 def rca_for_resmlp(model):
-    # set_training(model, True)
-    # data_loader = getTrainData(dataset='imagenet', path="E:\datasets\imagenet", batch_size=16, data_percentage=0.001)
-    # calibrate(data_loader, model, eval=False)
+    set_training(model, True)
+    data_loader = getTrainData(dataset='imagenet', path="E:\datasets\imagenet", batch_size=16, data_percentage=0.001)
+    calibrate(data_loader, model, eval=False)
 
     linear_layers = get_quant_layers(model.blocks) # 7 * 24
     for i in range(0, 24):
