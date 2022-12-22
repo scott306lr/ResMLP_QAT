@@ -18,7 +18,7 @@ class QPatchEmbed(nn.Module):
     def set_param(self, patch, to_bit):
         self.proj = QConv(patch.proj)
         self.norm = nn.Identity()
-        self.act  = QAct(to_bit=to_bit)
+        self.act  = QAct(to_bit=to_bit, obs_mode="patch_mod")
     
     def get_scales(self):
         scales = []
@@ -72,8 +72,13 @@ class QLayer_Block(nn.Module):
 
     def set_param(self, block, layer):  
         self.inner = QInner(block.inner)
-        self.act1 = QAct()
-        self.outer = QOuter(block.outer)
+
+        if layer == 0:
+            self.act1 = QAct(obs_mode="act0_mod")
+            self.outer = QOuter(block.outer, obs_mode="out0_mod")
+        else:
+            self.act1 = QAct()
+            self.outer = QOuter(block.outer)
 
         self.add_1 = QResAct(to_bit=self.res_to_bit)
 

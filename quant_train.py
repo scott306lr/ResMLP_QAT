@@ -284,10 +284,11 @@ def main_worker(gpu, ngpus_per_node, args):
         quantize_arch = quantize_arch_dict[args.arch]
         model = quantize_arch(model)
 
-    # if args.arch == "q_resmlp_v3":
-    #     for i in range(0, 24):
-    #         # model.blocks[i].inner.requires_grad = False
-    #         model.blocks[i].outer.weight.requires_grad = False
+    if args.arch == "q_resmlp_v4":
+        for i in range(0, 24):
+            model.blocks[i].inner.weight.requires_grad = False
+            model.blocks[i].inner.bias.requires_grad = False
+            model.blocks[i].outer.weight.requires_grad = False
     
     if args.freeze_w:
         for param in model.parameters():

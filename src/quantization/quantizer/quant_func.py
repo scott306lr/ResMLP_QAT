@@ -63,7 +63,7 @@ def get_scale_func(mode, Qn, Qp):
             return torch.max(torch.abs(mean - 3*std), torch.abs(mean + 3*std))/Qp
         return observer
 
-    elif mode == "lab1":
+    elif mode == "lab_weight":
         def observer(x: torch.Tensor):
             y = x.detach()
             std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
@@ -71,21 +71,57 @@ def get_scale_func(mode, Qn, Qp):
             return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp
         return observer
 
-    elif mode == "lab2":
+    elif mode == "lab_act":
         def observer(x: torch.Tensor):
             y = x.detach()
             std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-            NUM = 8
+            NUM = 10
             return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp
         return observer
     
-    elif mode == "lab3":
+    elif mode == "lab_outer":
         def observer(x: torch.Tensor):
             y = x.detach()
             std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
-            NUM = 30
+            NUM = 25
+            return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp
+        return observer
+
+    elif mode == "patch_mod":
+        def observer(x: torch.Tensor):
+            y = x.detach()
+            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+            NUM = 4
             return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp # >13
         return observer
+
+    elif mode == "out0_mod":
+        def observer(x: torch.Tensor):
+            y = x.detach()
+            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+            NUM = 40
+            return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp # >13
+        return observer
+    
+    elif mode == "act0_mod":
+        def observer(x: torch.Tensor):
+            y = x.detach()
+            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+            NUM = 40
+            return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp # >13
+        return observer
+    
+    elif mode == "act_mod":
+        def observer(x: torch.Tensor):
+            y = x.detach()
+            std, mean = torch.std_mean(y[y.nonzero(as_tuple=True)])
+            NUM = 40
+            return torch.max(torch.abs(mean - NUM*std), torch.abs(mean + NUM*std))/Qp # >13
+        return observer
+
+    
+    
+    
 
     else:
         raise NotImplementedError

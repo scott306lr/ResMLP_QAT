@@ -89,7 +89,7 @@ class _QBase(Module):
         super().__init__()
         self.Qn, self.Qp = signed_minmax(to_bit)
         self.to_bit = to_bit
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab1')
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab_weight')
         self.training = training
 
     def extra_repr(self):
@@ -102,11 +102,12 @@ class _QBase(Module):
         raise NotImplementedError
 
 class QLinear(_QBase):
-    def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True):
+    def __init__(self, linear: nn.Linear, bias_bit=32, to_bit=8, training=True, obs_mode='lab_weight'):
         _QBase.__init__(self, to_bit, training)
         self.inherit_layer(linear)
         self.bias_bit = bias_bit
         self.bQn, self.bQp = signed_minmax(self.bias_bit)
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode=obs_mode)
 
 
     def __repr__(self):
@@ -145,8 +146,8 @@ class QLinear(_QBase):
             if self.bias is not None:
                 self.b_int = round_pass((self.bias / b_s).clamp(self.bQn, self.bQp))
             
-            # return self.inference(x_q) * b_s, b_s
-            return self.light_quant(x_q, b_s)
+            return self.inference(x_q) * b_s, b_s
+            # return self.light_quant(x_q, b_s)
         else:
             return self.inference(x), None
         
@@ -206,11 +207,11 @@ class QConv(QLinear):
     #     return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups), a_s
 
 class QAct(_QBase):
-    def __init__(self, mult_bit=16, return_fp=False, to_bit=8, training=True):
+    def __init__(self, mult_bit=16, return_fp=False, to_bit=8, training=True, obs_mode='lab_act'):
         _QBase.__init__(self, to_bit, training)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lab2', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
+        self.observer = LSQObserver(mode=obs_mode, Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="Act")
         self.register_buffer('s', torch.tensor(0))
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
@@ -261,7 +262,7 @@ class QResAct(_QBase):
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lab2', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
+        self.observer = LSQObserver(mode='lab_act', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
         
         self.register_buffer('align_int', torch.tensor(0))
         self.register_buffer('s', torch.tensor(0))
@@ -295,7 +296,7 @@ class QResAct(_QBase):
             # align residual input and quantize
             self.S_res = res_a_s
             self.S_cur = a_s
-            self.align_int = round_pass((res_a_s/a_s))#.clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
+            self.align_int = round_pass((res_a_s/a_s).clamp(self.Qn, self.Qp)) #! This clamping limits align range, for experiments without limitation, pls remove.
             res_x_align = round_pass((res_x_q * self.align_int)).clamp(self.rQn, self.rQp)
             
             # obtain sum
@@ -350,7 +351,7 @@ def init_scale_counter(model):
 class QInner(QLinear):
     def __init__(self, inner: nn.Linear, bias_bit=32, to_bit=8, training=True):
         QLinear.__init__(self, inner, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab1')
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab_weight')
     
     def inherit_layer(self, inner: nn.Linear):
         self.in_features = inner.in_features
@@ -371,9 +372,9 @@ class QInner(QLinear):
     #     return x @ self.weight + self.bias, None#torch.ones_like(a_s)
 
 class QOuter(QLinear):
-    def __init__(self, outer: nn.Linear, bias_bit=32, to_bit=8, training=True):
+    def __init__(self, outer: nn.Linear, bias_bit=32, to_bit=8, training=True, obs_mode='lab_outer'):
         QLinear.__init__(self, outer, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lab3')
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode=obs_mode)
 
     def inherit_layer(self, outer: nn.Linear):
         self.in_features = outer.in_features
