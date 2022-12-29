@@ -72,7 +72,6 @@ class QLayer_Block(nn.Module):
 
     def set_param(self, block, layer):  
         self.inner = QInner(block.inner)
-
         if layer == 0:
             self.act1 = QAct(obs_mode="act0_mod")
             self.outer = QOuter(block.outer, obs_mode="out0_mod")

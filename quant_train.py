@@ -284,11 +284,11 @@ def main_worker(gpu, ngpus_per_node, args):
         quantize_arch = quantize_arch_dict[args.arch]
         model = quantize_arch(model)
 
-    if args.arch == "q_resmlp_v4":
-        for i in range(0, 24):
-            model.blocks[i].inner.weight.requires_grad = False
-            model.blocks[i].inner.bias.requires_grad = False
-            model.blocks[i].outer.weight.requires_grad = False
+    # if args.arch == "q_resmlp_v4":
+    #     for i in range(0, 24):
+    #         model.blocks[i].inner.weight.requires_grad = False
+    #         model.blocks[i].inner.bias.requires_grad = False
+    #         model.blocks[i].outer.weight.requires_grad = False
     
     if args.freeze_w:
         for param in model.parameters():
@@ -341,13 +341,14 @@ def main_worker(gpu, ngpus_per_node, args):
     
     
     # enlarge weight decay for inner linear's bias
-    if args.arch == "q_resmlp_v3":
+    if args.arch == "q_resmlp_v4":
         optimizer = torch.optim.SGD([
-            {'params': (p for name, p in model.named_parameters() if "inner.bias" not in name), 'weight_decay': args.weight_decay},
-            {'params': (p for name, p in model.named_parameters() if "inner.bias" in name), 'weight_decay': args.inner_wd}
+            {'params': (p for name, p in model.named_parameters() if "outer.weight" not in name), 'lr': args.lr},
+            {'params': (p for name, p in model.named_parameters() if "outer.weight" in name), 'lr': args.lr*0.1},
         ], 
-        lr=args.lr,
-        momentum=args.momentum)
+        # lr=args.lr,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay)
 
     else:
         optimizer = torch.optim.SGD(model.parameters(), args.lr,

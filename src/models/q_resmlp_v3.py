@@ -18,7 +18,7 @@ class QPatchEmbed(nn.Module):
     def set_param(self, patch, to_bit):
         self.proj = QConv(patch.proj)
         self.norm = nn.Identity()
-        self.act  = QAct(to_bit=to_bit)
+        self.act  = QAct(to_bit=to_bit, obs_mode="patch_mod")
     
     def get_scales(self):
         scales = []
@@ -70,22 +70,29 @@ class QLayer_Block(nn.Module):
         self.res_to_bit = res_to_bit
         self.set_param(block, layer)
 
-    def set_param(self, block, layer):  
-        # self.crossPatch = QCrossPatch([block.norm1, block.attn, block.gamma_1])
-        self.inner = QLinearInner([block.norm1, block.attn, block.gamma_1])
-        self.outer = QLinearOuter([block.norm1, block.attn, block.gamma_1])
+    def set_param(self, block, layer):
+        if layer == 0:
+            self.crossPatch = QCrossPatch([block.norm1, block.attn, block.gamma_1], obs_mode=['lab_weight', 'act0_mod', 'out0_mod'])
+        else:
+            self.crossPatch = QCrossPatch([block.norm1, block.attn, block.gamma_1], obs_mode=['lab_weight', 'lab_inner_act', 'lab_outer'])
+        self.add_1 = QResAct(to_bit=self.res_to_bit, obs_mode='lab_res1')
 
-        self.add_1 = QResAct(to_bit=self.res_to_bit)
-
-        self.linear1 = QCrossLayer1([block.norm2, block.mlp.fc1])
+        self.linear1 = QCrossLayer1([block.norm2, block.mlp.fc1], obs_mode='lab_cross1')
         self.relu = torch.nn.ReLU()
         self.act3 = QAct()
-        self.linear2 = QCrossLayer2([block.mlp.fc2, block.gamma_2])
+        self.linear2 = QCrossLayer2([block.mlp.fc2, block.gamma_2], obs_mode='lab_cross2')
+
+        # self.norm2 = QLinear(block.norm2)
+        # self.act2 = QAct()
+
+        # self.mlp = Q_Mlp(block.mlp)
+        # self.act3 = QAct()
+        # self.gamma_2 = QLinear(block.gamma_2)
 
         if layer == QUANT_LAYERS-1:
-            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
+            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True, obs_mode='lab_res2') # dequant output back to fp
         else:
-            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=False)
+            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=False, obs_mode='lab_res2')
 
     def get_scales(self):
         scales = []
@@ -110,9 +117,9 @@ class QLayer_Block(nn.Module):
         org_x, org_a_s = x, a_s
 
         # ----- Cross-patch sublayer ----- START
-        # x, a_s = self.crossPatch(x, a_s)
-        x, a_s = self.inner(x, a_s)
-        x, a_s = self.outer(x, a_s)
+        x, a_s = self.crossPatch(x, a_s)
+        # x, a_s = self.inner(x, a_s)
+        # x, a_s = self.outer(x, a_s)
         
         x, a_s = self.add_1(x, a_s, org_x, org_a_s)
         # ----- Cross-patch sublayer ----- END
@@ -125,6 +132,14 @@ class QLayer_Block(nn.Module):
 
         x, a_s = self.linear2(x, a_s)
         x, a_s = self.add_2(x, a_s, org_x, org_a_s)
+        # x, a_s = self.norm2(x, a_s)
+        # x, a_s = self.act2(x, a_s)
+
+        # x, a_s = self.mlp(x, a_s)
+        # x, a_s = self.act3(x, a_s)
+
+        # x, a_s = self.gamma_2(x, a_s)
+        # x, a_s = self.add_2(x, a_s, org_x, org_a_s)
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 

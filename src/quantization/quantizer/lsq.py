@@ -256,13 +256,13 @@ class QAct(_QBase):
     #     return x, a_s
 
 class QResAct(_QBase):
-    def __init__(self, bias_bit=32, mult_bit=16, return_fp=False, to_bit=8, training=True):
+    def __init__(self, bias_bit=32, mult_bit=16, return_fp=False, to_bit=8, training=True, obs_mode='lab_act'):
         _QBase.__init__(self, to_bit, training)
         self.bias_bit = bias_bit
         self.rQn, self.rQp = signed_minmax(self.bias_bit)
         self.mult_bit = mult_bit
         self.return_fp = return_fp
-        self.observer = LSQObserver(mode='lab_act', Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
+        self.observer = LSQObserver(mode=obs_mode, Qn=self.Qn, Qp=self.Qp, calibrate_count=20, momentum=0.1, name="ADD")
         
         self.register_buffer('align_int', torch.tensor(0))
         self.register_buffer('s', torch.tensor(0))
@@ -402,22 +402,23 @@ class QLinearInner(QLinear):
         self.out_features = gamma.out_features
 
         W1 = norm.weight.data * gamma.weight.data
-        B1 = norm.bias.data.repeat(196,1) @ gamma.weight.data + torch.inverse(attn.weight.data) @ attn.bias.data.repeat(384,1).T @ gamma.weight.data
+        B1 = norm.bias.data.repeat(196,1) @ gamma.weight.data #+ torch.inverse(attn.weight.data) @ attn.bias.data.repeat(384,1).T @ gamma.weight.data
         W2 = attn.weight.data
+        B2 = attn.bias.data.repeat(384,1).T @ gamma.weight.data
 
-        r1 = W1.abs().max()
-        r2 = W2.abs().max()
-        sT = torch.sqrt(r1*r2)/r2
+        # r1 = W1.abs().max()
+        # r2 = W2.abs().max()
+        # sT = torch.sqrt(r1*r2)/r2
 
-        W2 = W2 * sT
-        W1 = W1 / sT
-        B1 = B1 / sT
+        # W2 = W2 * sT
+        # W1 = W1 / sT
+        # B1 = B1 / sT
 
         self.weight = Parameter(W1)
         self.bias = Parameter(B1)
 
-        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
-        self.register_buffer('b_int', torch.zeros_like(self.bias.data))
+        self.register_buffer('w_int', torch.zeros_like(W1.data))
+        self.register_buffer('b_int', torch.zeros_like(B1.data))
 
     def inference(self, x: torch.Tensor):
         return x @ self.w_int + self.b_int
@@ -439,22 +440,25 @@ class QLinearOuter(QLinear):
         self.out_features = attn.out_features
 
         W1 = norm.weight.data * gamma.weight.data
-        B1 = norm.bias.data.repeat(196,1) @ gamma.weight.data + torch.inverse(attn.weight.data) @ attn.bias.data.repeat(384,1).T @ gamma.weight.data
+        B1 = norm.bias.data.repeat(196,1) @ gamma.weight.data #+ torch.inverse(attn.weight.data) @ attn.bias.data.repeat(384,1).T @ gamma.weight.data
         W2 = attn.weight.data
+        B2 = attn.bias.data.repeat(384,1).T @ gamma.weight.data
 
-        r1 = W1.abs().max()
-        r2 = W2.abs().max()
-        sT = torch.sqrt(r1*r2)/r2
+        # r1 = W1.abs().max()
+        # r2 = W2.abs().max()
+        # sT = torch.sqrt(r1*r2)/r2
 
-        W2 = W2 * sT
-        W1 = W1 / sT
-        B1 = B1 / sT
+        # W2 = W2 * sT
+        # W1 = W1 / sT
+        # B1 = B1 / sT
 
-        self.weight = Parameter(W2, requires_grad=False)
-        self.register_buffer('w_int', torch.zeros_like(self.weight.data))
+        self.weight = Parameter(W2)
+        self.bias = Parameter(B2)
+        # self.register_parameter('bias', None)
 
-        self.register_parameter('bias', None)
-        self.register_buffer('b_int', None)
+        self.register_buffer('w_int', torch.zeros_like(W2.data))
+        self.register_buffer('b_int', torch.zeros_like(B2.data))
+        # self.register_buffer('b_int', None)
             
     def inference(self, x: torch.Tensor):
         return self.w_int @ x
@@ -466,16 +470,16 @@ class QLinearOuter(QLinear):
     #     return self.weight @ x, None#torch.ones_like(a_s)
 
 class QCrossPatch(_QBase):
-    def __init__(self, linears: List[nn.Linear], mult_bit=16, bias_bit=32, to_bit=8, training=True):
+    def __init__(self, linears: List[nn.Linear], mult_bit=16, bias_bit=32, to_bit=8, training=True, obs_mode=['lab_weight', 'lab_inner_act', 'lab_outer']):
         _QBase.__init__(self, to_bit, training)
         self.inherit_layer(linears)
         self.bias_bit = bias_bit
         self.bQn, self.bQp = signed_minmax(self.bias_bit)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', name="W1")
-        self.observer2 = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', name="W2")
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode=obs_mode[0], name="W1")
+        self.observer2 = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode=obs_mode[2], name="W2")
 
         self.mult_bit = mult_bit
-        self.observer_act = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', calibrate_count=20, momentum=0.1, name="Wact")
+        self.observer_act = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode=obs_mode[1], calibrate_count=20, momentum=0.1, name="Wact")
         self.register_buffer('mult', torch.tensor(0))
         self.register_buffer('shift', torch.tensor(0))
     
@@ -484,39 +488,43 @@ class QCrossPatch(_QBase):
         self.in_features = norm.in_features
         self.out_features = gamma.out_features
 
-        self.norm_w = Parameter(norm.weight.data, requires_grad=False)
-        self.norm_b = Parameter(norm.bias.data, requires_grad=False)
-        self.attn_w = Parameter(attn.weight.data, requires_grad=False)
-        self.attn_b = Parameter(attn.bias.data, requires_grad=False)
-        self.gamma_w = Parameter(gamma.weight.data, requires_grad=False)
+        self.norm_w = Parameter(norm.weight.data)
+        self.norm_b = Parameter(norm.bias.data)
+        self.attn_w = Parameter(attn.weight.data)
+        self.attn_b = Parameter(attn.bias.data)
+        self.gamma_w = Parameter(gamma.weight.data)
 
         W1 = self.norm_w * self.gamma_w
-        B1 = self.norm_b.repeat(196,1) @ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
+        B1 = self.norm_b.repeat(196,1) @ self.gamma_w
         W2 = self.attn_w
+        B2 = self.attn_b.repeat(384,1).T @ self.gamma_w
 
         self.register_buffer('w1_int', torch.zeros_like(W1.data))
         self.register_buffer('b1_int', torch.zeros_like(B1.data))
         self.register_buffer('w2_int', torch.zeros_like(W2.data))
+        self.register_buffer('b2_int', torch.zeros_like(B2.data))
 
     def light_quant(self, x_q, b_s):
-        B1 = self.norm_b.repeat(196,1) @ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
+        B1 = self.norm_b.repeat(196,1) @ self.gamma_w
         return (x_q @ self.w1_int) * b_s + B1, b_s
-    
-    def light_quant2(self, x_q, b_s):
-        return (self.w2_int @ x_q) * b_s, b_s
 
     def inference(self, x: torch.Tensor):
         return x @ self.w1_int + self.b1_int
 
+    def light_quant2(self, x_q, b_s):
+        B2 = self.attn_b.repeat(384,1).T @ self.gamma_w
+        return (self.w2_int @ x_q) * b_s + B2, b_s
+
     def inference2(self, x: torch.Tensor):
-        return self.w2_int @ x
+        return self.w2_int @ x + self.b2_int
 
     def forward(self, x, a_s):
         if self.training:
             # merge weights
             W1 = self.norm_w * self.gamma_w
-            B1 = self.norm_b.repeat(196,1)@ self.gamma_w + torch.inverse(self.attn_w) @ self.attn_b.repeat(384,1).T @ self.gamma_w
+            B1 = self.norm_b.repeat(196,1) @ self.gamma_w
             W2 = self.attn_w
+            B2 = self.attn_b.repeat(384,1).T @ self.gamma_w
 
             #! W1
             # requant inputs
@@ -529,13 +537,14 @@ class QCrossPatch(_QBase):
             # quantize weights and bias #1
             self.w1_int = round_pass((W1 / w1_s).clamp(self.Qn, self.Qp))
             self.b1_int = round_pass((B1 / b1_s).clamp(self.bQn, self.bQp))
-            # x1 = self.inference(x_q)
-            x1, _ = self.test(x_q, b1_s)
+            # x1 = self.inference(x_q) * b1_s
+            x1, _ = self.light_quant(x_q, b1_s)
 
             #! ACT
+            x_q2 = x1 / b1_s
             scale = self.observer_act(x1)
-            self.s, (self.mult, self.shift) = dyadic_scale(scale / a_s, self.mult_bit)
-            x_round = round_pass((x_q / self.s)).clamp(self.Qn, self.Qp)
+            self.s, (self.mult, self.shift) = dyadic_scale(scale / b1_s, self.mult_bit)
+            x_round = round_pass((x_q2 / self.s)).clamp(self.Qn, self.Qp)
 
             #! W2
             # initialize scale on first input
@@ -544,10 +553,11 @@ class QCrossPatch(_QBase):
 
             # quantize weights and bias #1
             self.w2_int = round_pass((W2 / w2_s).clamp(self.Qn, self.Qp))
+            self.b2_int = round_pass((B2 / b2_s).clamp(self.bQn, self.bQp))
+
+            return self.light_quant2(x_round, b2_s)
             # x2 = self.inference2(x_round)
-            x2, _ = self.test(x_q, b2_s)
-            
-            return x2 * b2_s, b2_s
+            # return x2 * b2_s, b2_s
 
         else:
             x1 = self.inference(x)
@@ -563,9 +573,9 @@ class QCrossPatch(_QBase):
 
 
 class QCrossLayer1(_QBase):
-    def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True):
+    def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True, obs_mode='lab_weight'):
         QLinear.__init__(self, linears, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', name="CL1")
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode=obs_mode, name="CL1")
 
     def inherit_layer(self, linears: List[nn.Linear]):
         norm, fc1 = linears[0], linears[1]
@@ -577,9 +587,16 @@ class QCrossLayer1(_QBase):
         self.fc1_w = Parameter(fc1.weight.data)
         self.fc1_b = Parameter(fc1.bias.data)
 
-        self.register_buffer('w_int', torch.zeros_like(fc1.weight.data))
-        self.register_buffer('b_int', torch.zeros_like(fc1.bias.data))
+        weight = self.fc1_w @ self.norm_w
+        bias = self.fc1_b + F.linear(self.fc1_w, self.norm_b)
 
+        self.register_buffer('w_int', torch.zeros_like(weight.data))
+        self.register_buffer('b_int', torch.zeros_like(bias.data))
+
+    def light_quant(self, x_q, b_s):
+        B1 = self.norm_b.repeat(196,1) @ self.gamma_w
+        return (x_q @ self.w_int) * b_s + B1, b_s
+        
     def inference(self, x: torch.Tensor):
         return F.linear(x, self.w_int, self.b_int)
 
@@ -611,9 +628,9 @@ class QCrossLayer1(_QBase):
     #     return F.linear(x, weight, bias), a_s
 
 class QCrossLayer2(QLinear):
-    def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True):
+    def __init__(self, linears: List[nn.Linear], bias_bit=32, to_bit=8, training=True, obs_mode='lab_weight'):
         QLinear.__init__(self, linears, bias_bit, to_bit, training)
-        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode='lsq', name="CL1")
+        self.observer = LSQObserver(Qn=self.Qn, Qp=self.Qp, mode=obs_mode, name="CL1")
 
     def inherit_layer(self, linears: List[nn.Linear]):
         fc2, gamma_2 = linears[0], linears[1]
@@ -624,8 +641,11 @@ class QCrossLayer2(QLinear):
         self.fc2_b = Parameter(fc2.bias.data)
         self.gamma2_w = Parameter(gamma_2.weight.data)
 
-        self.register_buffer('w_int', torch.zeros_like(fc2.weight.data))
-        self.register_buffer('b_int', torch.zeros_like(fc2.bias.data))
+        weight = self.gamma2_w @ self.fc2_w 
+        bias = F.linear(self.gamma2_w, self.fc2_b)
+
+        self.register_buffer('w_int', torch.zeros_like(weight.data))
+        self.register_buffer('b_int', torch.zeros_like(bias.data))
 
     def inference(self, x: torch.Tensor):
         return F.linear(x, self.w_int, self.b_int)
