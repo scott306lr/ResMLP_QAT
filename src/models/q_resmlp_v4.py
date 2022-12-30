@@ -4,11 +4,13 @@ import copy
 
 from ..quantization.quantizer.lsq import *
 # from ..quantization.quantizer.lsq import *
-from timm.models.vision_transformer import Mlp, PatchEmbed , _cfg
+from timm.models.vision_transformer import Mlp, PatchEmbed, _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_,  DropPath
 
 # from resmlp import resmlp_24
+
+
 class QPatchEmbed(nn.Module):
     def __init__(self, patch, bias_bit=None, to_bit=8):
         super(QPatchEmbed, self).__init__()
@@ -18,8 +20,8 @@ class QPatchEmbed(nn.Module):
     def set_param(self, patch, to_bit):
         self.proj = QConv(patch.proj)
         self.norm = nn.Identity()
-        self.act  = QAct(to_bit=to_bit, obs_mode="patch_mod")
-    
+        self.act = QAct(to_bit=to_bit, obs_mode="patch_mod")
+
     def get_scales(self):
         scales = []
         # scales += self.proj.get_scales("PatchEmbed_Conv")
@@ -35,6 +37,7 @@ class QPatchEmbed(nn.Module):
 
         return x, a_s
 
+
 class Q_Mlp(nn.Module):
     def __init__(self, mlp):
         super(Q_Mlp, self).__init__()
@@ -45,7 +48,7 @@ class Q_Mlp(nn.Module):
         self.relu = torch.nn.ReLU()
         self.act = QAct()
         self.fc2 = QLinear(mlp.fc2)
-    
+
     def get_scales(self):
         scales = []
         # scales += self.fc1.get_scales(f"L{self.layer}_L5")
@@ -53,7 +56,7 @@ class Q_Mlp(nn.Module):
         # scales += self.act1.get_scales(f"L{self.layer}_Act5")
         # scales += self.act2.get_scales(f"L{self.layer}_Act6")
         return scales
-    
+
     def forward(self, x, a_s=None):
         # forward using the quantized modules
         x, a_s = self.fc1(x, a_s)
@@ -62,7 +65,10 @@ class Q_Mlp(nn.Module):
         x, a_s = self.fc2(x, a_s)
         return x, a_s
 
+
 QUANT_LAYERS = 24
+
+
 class QLayer_Block(nn.Module):
     def __init__(self, block, layer, res_to_bit):
         super(QLayer_Block, self).__init__()
@@ -70,14 +76,17 @@ class QLayer_Block(nn.Module):
         self.res_to_bit = res_to_bit
         self.set_param(block, layer)
 
-    def set_param(self, block, layer):  
-        self.inner = QInner(block.inner)
+    def set_param(self, block, layer):
+        # self.inner = QLinearInner(block.inner)
+        self.inner = QLinearInner([block.norm1, block.attn, block.gamma_1])
         if layer == 0:
             self.act1 = QAct(obs_mode="act0_mod")
-            self.outer = QOuter(block.outer, obs_mode="out0_mod")
+            # self.outer = QOuter(block.outer, obs_mode="out0_mod")
+            self.outer = QLinearOuter([block.norm1, block.attn, block.gamma_1])
         else:
             self.act1 = QAct()
-            self.outer = QOuter(block.outer)
+            # self.outer = QOuter(block.outer)
+            self.outer = QLinearOuter([block.norm1, block.attn, block.gamma_1])
 
         self.add_1 = QResAct(to_bit=self.res_to_bit)
 
@@ -95,7 +104,8 @@ class QLayer_Block(nn.Module):
         # self.linear2 = QCrossLayer2([block.mlp.fc2, block.gamma_2])
 
         if layer == QUANT_LAYERS-1:
-            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True) # dequant output back to fp
+            # dequant output back to fp
+            self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True)
         else:
             self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=False)
 
@@ -116,7 +126,7 @@ class QLayer_Block(nn.Module):
         scales += self.add_1.get_scales(f"L{self.layer}_Add1")
         scales += self.add_2.get_scales(f"L{self.layer}_Add2")
         return scales
-   
+
     # ! this implementation only works for per-tensor (transpose)
     def forward(self, x, a_s=None):
         org_x, org_a_s = x, a_s
@@ -125,11 +135,11 @@ class QLayer_Block(nn.Module):
         x, a_s = self.inner(x, a_s)
         x, a_s = self.act1(x, a_s)
         x, a_s = self.outer(x, a_s)
-        
+
         x, a_s = self.add_1(x, a_s, org_x, org_a_s)
         # ----- Cross-patch sublayer ----- END
         org_x, org_a_s = x, a_s
-        
+
         # ---- Cross-channel sublayer ---- START
         x, a_s = self.norm2(x, a_s)
         x, a_s = self.act2(x, a_s)
@@ -142,18 +152,24 @@ class QLayer_Block(nn.Module):
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
+
 RES_RESCALE_BIT = 8
+
+
 class Q_ResMLP24(nn.Module):
     """
         Quantized ResMLP24 model.
     """
+
     def __init__(self, model):
         super().__init__()
         self.quant_input = QAct(to_bit=8)
-        self.quant_patch = QPatchEmbed(model.patch_embed, to_bit=RES_RESCALE_BIT)
-        self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
-        self.norm = model.norm#QLinear(model.norm) #model.norm
-        self.head = model.head#QLinear(getattr(model, 'head'))
+        self.quant_patch = QPatchEmbed(
+            model.patch_embed, to_bit=RES_RESCALE_BIT)
+        self.blocks = nn.ModuleList([QLayer_Block(
+            model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
+        self.norm = model.norm  # QLinear(model.norm) #model.norm
+        self.head = model.head  # QLinear(getattr(model, 'head'))
 
         self.org_blocks = model.blocks
 
@@ -183,16 +199,16 @@ class Q_ResMLP24(nn.Module):
 
         for i in range(QUANT_LAYERS, 24):
             x = self.org_blocks[i](x)
-            
-   
+
         #! all fp32 below
         x = self.norm(x)
         x = x.mean(dim=1).reshape(B, 1, -1)
         x = x[:, 0]
         x = self.head(x)
         x = x.view(x.size(0), -1)
-        
+
         return x
+
 
 def q_resmlp_v4(model):
     net = Q_ResMLP24(model)
