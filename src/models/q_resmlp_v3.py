@@ -82,13 +82,6 @@ class QLayer_Block(nn.Module):
         self.act3 = QAct()
         self.linear2 = QCrossLayer2([block.mlp.fc2, block.gamma_2], obs_mode='lab_cross2')
 
-        # self.norm2 = QLinear(block.norm2)
-        # self.act2 = QAct()
-
-        # self.mlp = Q_Mlp(block.mlp)
-        # self.act3 = QAct()
-        # self.gamma_2 = QLinear(block.gamma_2)
-
         if layer == QUANT_LAYERS-1:
             self.add_2 = QResAct(to_bit=self.res_to_bit, return_fp=True, obs_mode='lab_res2') # dequant output back to fp
         else:
@@ -118,8 +111,6 @@ class QLayer_Block(nn.Module):
 
         # ----- Cross-patch sublayer ----- START
         x, a_s = self.crossPatch(x, a_s)
-        # x, a_s = self.inner(x, a_s)
-        # x, a_s = self.outer(x, a_s)
         
         x, a_s = self.add_1(x, a_s, org_x, org_a_s)
         # ----- Cross-patch sublayer ----- END
@@ -132,14 +123,6 @@ class QLayer_Block(nn.Module):
 
         x, a_s = self.linear2(x, a_s)
         x, a_s = self.add_2(x, a_s, org_x, org_a_s)
-        # x, a_s = self.norm2(x, a_s)
-        # x, a_s = self.act2(x, a_s)
-
-        # x, a_s = self.mlp(x, a_s)
-        # x, a_s = self.act3(x, a_s)
-
-        # x, a_s = self.gamma_2(x, a_s)
-        # x, a_s = self.add_2(x, a_s, org_x, org_a_s)
         # ---- Cross-channel sublayer ---- END
         return x, a_s
 
@@ -155,8 +138,6 @@ class Q_ResMLP24(nn.Module):
         self.blocks = nn.ModuleList([QLayer_Block(model.blocks[i], layer=i, res_to_bit=RES_RESCALE_BIT) for i in range(24)])
         self.norm = model.norm#QLinear(model.norm) #model.norm
         self.head = model.head#QLinear(getattr(model, 'head'))
-
-        self.org_blocks = model.blocks
 
     def get_scales(self):
         scales = []
