@@ -38,7 +38,7 @@ def get_quantized_activation(qmodel):
     print("Loading a small piece of training data...")
     data_loader = getTrainData(dataset='imagenet', path="/mnt/disk1/imagenet/", batch_size=16, data_percentage=0.0001)
     print("Calibrating...")
-    inputs = calibrate(data_loader, qmodel, eval=False, only_once=True)
+    inputs = calibrate(data_loader, qmodel, eval=True, only_once=True)
     hook_handler.remove_hook()
 
     inputs = inputs[0] #np.array([val.detach().numpy() for val in inputs])

@@ -135,6 +135,9 @@ dmypy.json
 *.tar
 /folder
 
+# pickle files
+*.pkl
+
 # wandb
 /wandb
 
